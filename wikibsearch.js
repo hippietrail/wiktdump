@@ -198,7 +198,7 @@ function getTitle(dump, indexS, gotTitle) {
 
             offset = upper * Math.pow(2, 32) + lower;
 
-            if (upper >= 65536) console.warn(`** title offset ${offset} (${parseInt(+upper, 16)} : ${parseInt(+lower, 16)}) is greater than 48-bits!`);
+            if (upper > 2097151) console.warn(`** title offset ${offset} (${parseInt(+upper, 16)} : ${parseInt(+lower, 16)}) is greater than 53-bits!`);
             if (offset < 0 || offset >= dump.files.t.byteLen) throw 'title offset ' + offset + ' out of range';
 
             // t: titles all.txt
@@ -250,7 +250,7 @@ function getPageInfo(dump, indexS, gotPageInfo) {
             upper = data.readUInt32LE(4);
             offset = upper * Math.pow(2, 32) + lower;
 
-            if (upper >= 65536) console.warn(`** dump offset ${offset} (${parseInt(upper, 16)} : ${parseInt(lower, 16)}) is greater than 48-bits!`);
+            if (upper > 2097151) console.warn(`** dump offset ${offset} (${parseInt(+upper, 16)} : ${parseInt(+lower, 16)}) is greater than 53-bits!`);
 
             if (offset < 0 || offset >= dump.files.d.byteLen) {
               throw 'dump offset ' + offset + ' out of range';
@@ -325,7 +325,7 @@ function getArticle(dump, indexS, gotArticle) {
             upper = data.readUInt32LE(4);
             offset = upper * Math.pow(2, 32) + lower;
 
-            if (upper >= 65536) console.warn(`** dump offset ${offset} (${parseInt(upper, 16)} : ${parseInt(lower, 16)}) is greater than 48-bits!`);
+            if (upper > 2097151) console.warn(`** dump offset ${offset} (${parseInt(+upper, 16)} : ${parseInt(+lower, 16)}) is greater than 53-bits!`);
 
             revisionOffset = data.readUInt32LE(8);
 
@@ -824,7 +824,7 @@ function parseTranslationsSection(section) {
     tables = section.body.match(/^{{trans-see\|.*?}}/mg);
 
     if (!tables) {
-      console.log("UNEXPECTED 853", section.body);
+      console.log("UNEXPECTED 827", section.body);
     }
   }
 
@@ -839,132 +839,142 @@ function parseTranslationTable(table) {
 
   let check, also, id, gloss, rawList, see;
 
+  let retval = { err: "unfilled retval" }
+
   if (mch) {
     [ , check, also, id, gloss, rawList ] = mch;
-    let list = rawList.replace(/^{{(?:check)?trans-mid}}\n/mg, "");
-    list = rawList.replace(/^\&lt;.*\&gt;\n/mg, "");
+    let list = rawList.replace(/^{{(?:check)?trans-mid}}\n/mg, "") // remove trans-mid
+                       //.replace(/^\&lt;.*\&gt;\n/mg, "");        // TODO what's this for??
 
     const arr = list.match(/^\*.*(\n\*:.*)*/mg);
 
     // there are tables with glosses but no translations
     if (!arr) {
-      return { check, also, id, gloss };
-    }
+      retval = { check, also, id, gloss };
+    } else {
+      const arr2 = arr.map(item => {
+        let langName, langItemsRaw, sublangsRaw;
 
-    const arr2 = arr.map(item => {
-      //const [, xlang, xfoo, xbar] = "* Latin:\n* bar\n* baz\n".match(/^\*\s*(.*?)\s*:(?:\s*(.*))\n([\s\S]*)/m);
-      let xlang, xfoo, xbar;
-      try {
-        //[, xlang, xfoo, xbar] = item.match(/^\*\s*(.*?)\s*:(?:\s*(.*))\n([\s\S]*)/m);
-        [, xlang, xfoo, xbar] = item.match(/^\*\s*(.*?)\s*:(?: *(.*))(?:\n([\s\S]*))?/m)
-        //console.log(JSON.stringify({xlang, xfoo, xbar}, undefined, "  "));
-      } catch (e) {
-        console.log("CAUGHT", /*e,*/ item)
-      }
-        //const xbar = xfoo && xfoo.split("\n")
-      //console.log(JSON.stringify({xlang, xfoo, xbar}, undefined, "  "));
+        [, langName, langItemsRaw, sublangsRaw] = item.match(/^\*\s*(.*?)\s*:(?: *(.*))(?:\n([\s\S]*))?/m)
 
-      // ^\*\s*         - start of string, asterisk, any amount of whitespace
-      // (.*?)          - minimal amount of any text - LANGUAGE NAME
-      // \s*:\s*        - colon with optional whitespace on either side
-      //
-      // (?:
-      //    ([^\n]*)    - maximum amount of any text until the first linebreak - REST OF FIRST LINE
-      //    \n?         - optional linebreak
-      // )?
-      //
-      // ([\s\S]*)?     - everything else up to the end of the string, including linebreaks
+        // lang with direct trans only, no sublangs
+        if (langItemsRaw && !sublangsRaw) {
+          const tarr = parseTransDirectEntries(langName, langItemsRaw);
 
-      //const [, xlang, xmain, xsubs] = item.match(/^\*\s*(.*?)\s*:\s*(?:([^\n]*)\n?)?([\s\S]*)?/m);
-      //console.log(JSON.stringify({xlang, xmain, xsubs}, false, "  "));
-
-      const [, lang, rest] = item.match(/^\*\s*(.*?)\s*:\s*([\s\S]*)/m);
-
-      // languages with sublanguages
-      if (rest.charAt(0) === '*') {
-        const subs = rest.match(/^\*.*/mg).map(subitem => {
-          let lang2, subs;
-
-          try {
-            [, lang2, subs] = subitem.match(/^\*:\s*(.*?)\s*:\s*(.*)/);
-          } catch (e) {
-            console.log("CAUGHT 891", e, subitem)
-          }
-
-          let tarr0;
-          try {
-            tarr0 = subs.match(/{{t.*?}}(?: {{[^t].*?}})?/g);
-          } catch (e) {
-            console.log("CAUGHT 898", e, subs)
-          }
-
-          if (!tarr0) {
-            return { subname: lang2, subs };
-          }
-
-          let tarr = tarr0.map(tr => matchTTemplate(tr));
-
-          if (lang === "Chinese") {
-            //const tarr2 = [];
-            let tr;
-
-            for (let i = tarr.length - 1; i >= 0; --i) {
-              if ("tr" in tarr[i])
-                tr = tarr[i].tr;
-              else if (tr)
-                tarr[i]._tr = tr;
-            }
-          }
-
-          return { subname: lang2, tarr };
-        });
-
-        const obj = subs.reduce((acc, cur) => {
-          acc[cur.subname] = cur.tarr || cur.subs;
-          return acc;
-        }, {});
-
-        return { name: lang, subs: obj };
-
-      // languages without sublanguages
-      } else {
-        const tarr0 = rest.match(/{{t.*?}}(?: {{[^t].*?}})?/g);
-
-        if (!tarr0) {
-          const mch = lang.match(/^{{ttbc\|([a-z][a-z][a-z]?)}}$/);
-
-          if (mch && mch[1]) {
-            return { code: mch[1], err: rest }
-          }
-
-          return { name: lang, err: rest };
+          return { name: langName, trans: tarr };
         }
 
-        const tarr = tarr0.map(tr => matchTTemplate(tr));
+        // lang with sublangs only, no direct trans
+        else if (!langItemsRaw && sublangsRaw) {
+          const obj = parseTransSublangs(langName, sublangsRaw);
 
-        return { name: lang, tarr };
-      }
-    });
+          return { name: langName, subs: obj };
+        }
 
-    const obj2 = arr2.reduce((acc, cur) => {
-      if (Object.keys(cur).length !== 2) console.log("WOAH1")
-      else if (Object.keys(cur).filter(c => ["code", "err", "name", "subs", "tarr"].indexOf(c) === -1).length !== 0) console.log("WOAH2", Object.keys(cur));
+        else if (langItemsRaw && sublangsRaw) {
+          const tarr = parseTransDirectEntries(langName, langItemsRaw);
+          const subs = parseTransSublangs(langName, sublangsRaw);
 
-      acc[cur.name || cur.code] = cur.subs ? { sublangs: cur.subs} : cur.tarr || { err: cur.err };
-      return acc;
-    }, {});
+          return { name: langName, trans: tarr, subs };
+        }
 
-    return { check, also, id, gloss, langs: obj2 };
-  } else {
-    mch = table.match(/^{{trans-see\|(.*?)}}/);
+        else return { name: langName, err: "UNEXPECTED neither direct trans entries nor sublangs" }
+      });
 
-    if (mch) {
-      [ , see ] = mch;
+      // convert array into object using language names as keys
+      const obj2 = arr2.reduce((acc, cur) => {
+        if (Object.keys(cur).filter(c => ["code", "err", "name", "subs", "trans"].indexOf(c) === -1).length !== 0) console.log("WOAH2", Object.keys(cur));
 
-      return { see };
-    } else
-      console.log("UNEXPECTED 966", table, "UNEXPECTED 966")
+        const key = cur.name || cur.code;
+        let val = {}
+
+        if ("subs" in cur) {
+          val.sublangs = cur.subs;
+          if ("trans" in cur) {
+            val.trans = cur.trans;
+          }
+        } else if ("trans" in cur) {
+          val.trans = cur.trans;
+        } else {
+          if ("err" in cur) val.err = cur.err;
+          else val.err = "no subs or trans but no error either"
+        }
+
+        acc[key] = val;
+
+        return acc;
+      }, {});
+  
+      return { check, also, id, gloss, langs: obj2 };
+    }
   }
+  return retval;
+}
+
+function parseTransDirectEntries(langName, langItemsRaw) {
+  let arr = langItemsRaw.match(/{{t.*?}}(?: {{[^t].*?}})?/g);
+
+  if (arr) return arr.map(tr => matchTTemplate(tr));
+  
+  let mch;
+
+  arr = langItemsRaw.match(/\[\[.*?\]\] {{g\|.}} {{qualifier\|.*?}}/g);
+
+  if (arr) return arr.map(tr => matchTNonTemplate(tr));
+
+  mch = langName.match(/^{{ttbc\|([a-z][a-z][a-z]?)}}$/);
+
+  if (mch && mch[1])
+    return { code: mch[1], err: langItemsRaw, line: 928 }
+
+  return { name: langName, err: langItemsRaw, line: 930 };
+}
+
+function parseTransSublangs(langName, sublangsRaw) {
+  const subs = sublangsRaw.match(/^\*.*/mg).map(subitem => {
+    const mch = subitem.match(/^\*:\s*(.*?)\s*:\s*(.*)/);
+
+    if (!mch) {
+      // TODO this return is not yet handled by the caller
+      return { line: 939, subitem };
+    }
+
+    const [, lang2, subs] = mch;
+
+    const tarr0 = subs.match(/{{t.*?}}(?: {{[^t].*?}})?/g);
+
+    if (!tarr0)
+      return { subname: lang2, subs };
+
+    const tarr = tarr0.map(tr => matchTTemplate(tr));
+
+    if (langName === "Chinese") {
+      let tr;
+
+      for (let i = tarr.length - 1; i >= 0; --i) {
+        if ("tr" in tarr[i]) {
+          tr = tarr[i].tr;
+          if (tr.includes("[[") && tr.includes("]]")) {
+            tr = tr.substring(2, tr.length-2)
+            tarr[i]._tr = tr;
+          }
+        }
+        else if (tr)
+          tarr[i]._tr = tr;
+      }
+    }
+
+    return { subname: lang2, tarr };
+  });
+
+  const obj = subs.reduce((acc, cur) => {
+    // TODO why does this never happen?
+    if (("tarr" in cur) && ("subs" in cur)) console.log("** 976 cur has both tarr and subs")
+    acc[cur.subname] = cur.tarr || cur.subs;
+    return acc;
+  }, {});
+
+  return obj;
 }
 
 function matchTTemplate(temp) {
@@ -974,7 +984,9 @@ function matchTTemplate(temp) {
 
   const followspl = follow && parseT2Template(follow);
 
-  return { ...mainspl, ...followspl };
+  const retval = { ...mainspl, ...followspl };
+
+  return retval;
 }
 
 function parseTTemplate(tt) {
@@ -989,7 +1001,7 @@ function parseTTemplate(tt) {
       case "0":
         if (v === 't-needed')
           o.needed = true;
-        else if (['t', 't-', 't+', 't-needed', 't-check', 't+check'].indexOf(v) === -1)
+        else if (!['t', 't-', 't+', 't-needed', 't-check', 't+check'].includes(v))
           o["unexpected 't' template"] = v;
         break;
 
@@ -1001,11 +1013,11 @@ function parseTTemplate(tt) {
         break;
 
       case "2":
-        o.w = v;
-
         if (/(?:\[\[|\]\])/.test(v)) {
-          o["wikilinks-stripped"] = v.replace(/\[\[(?:[^\|\]]*\|)?([^\]]*)\]\]/g, "$1");
-        }
+          o.w = v.replace(/\[\[(?:[^\|\]]*\|)?([^\]]*)\]\]/g, "$1");
+          o["with-wikilinks"] = v;
+        } else
+          o.w = v;
         break;
 
       case "3": case "4":
@@ -1035,8 +1047,8 @@ function parseTTemplate(tt) {
         if (langCode === "ja") {
           const tr2 = v.split(/,\s*/);
           if (tr2.length === 2) {
-            o.kana = tr2[0];
-            o.tr = tr2[1];
+            o._kana = tr2[0];
+            o._tr = tr2[1];
           } else {
             o.tr = tr2[0]
           }
@@ -1057,10 +1069,17 @@ function parseT2Template(t2) {
   const p = parseTemplate(t2);
   const o = {};
 
-  if (p[0] !== "qualifier")
-    o["unexpected translation follower"] = p[0];
+  if (p[0] === "qualifier" || p[0] === "q") {
+    const v = [];
+    for (let i = 1; i in p; ++i) {
+      v[i-1] = p[i];
+    }
+    if (v.length) o.q = v;
+  }
+  else if (p[0] === "gloss")
+    o.g = p[1];
   else
-    o.q = p[1];
+    o["unexpected translation follower"] = p[0];
 
   return o;
 }
@@ -1085,62 +1104,66 @@ function parseTemplate(temp) {
   return r.ob;
 }
 
+// before translations were done with {{templates}} they were done with [[wikilinks]] 
+function matchTNonTemplate(nonTemp) {
+  const [, w, g, q] = nonTemp.match(/\[\[(.*?)\]\] {{g\|(.)}} {{qualifier\|(.*)?}}/);
+
+  return { w, g: [g], q }
+}
+
 function filterTranslations(parsedTranslations, namedTranslations) {
   const filteredTranslations = parsedTranslations.reduce((acc, transTable, idx) => {
+    if (!transTable) return { unexpected: { line: 1122, parsedTranslations } }
+
     if (!("langs" in transTable)) return acc;
 
     const langOb = {};
-    const langAr = Object.keys(transTable.langs)
-      .filter(x => namedTranslations
-      .map(n => {
-        const sl = n.indexOf("/");
-        const l = (sl === -1) ? n : n.substring(0, sl);
+    const langAr = Object.keys(transTable.langs).filter(x => namedTranslations.map(n => {
+        const sl = n.indexOf("/"), l = (sl === -1) ? n : n.substring(0, sl);
         return l;
       })
-      .includes(x));
+      .includes(x)
+    );
 
-      if (langAr.length) {
-        langAr.forEach(v => {
-          const ttlv = transTable.langs[v];
+    if (langAr.length) {
+      langAr.forEach(langName => {
+        const transLangEntryOb = transTable.langs[langName];
+        //let filteredSublangs;
 
-          let filteredSublangs;
+        //filteredSublangs = transLangEntryOb;
+        if ("sublangs" in transLangEntryOb)
+          /*filteredSublangs*/transLangEntryOb.sublangs = filterSublangs(transLangEntryOb.sublangs, namedTranslations);
+        
+        langOb[langName] = transLangEntryOb//filteredSublangs;
+      });
+      acc.push({ ...transTable, langs: langOb });
+    }
 
-          if ("sublangs" in ttlv)
-            filteredSublangs = filterSublangs(ttlv, namedTranslations);
-          else
-            filteredSublangs = ttlv;
-          
-          langOb[v] = filteredSublangs;
-        });
-        acc.push({ ...transTable, langs: langOb });
-      }
-
-      return acc;
+    return acc;
   }, []);
 
   return filteredTranslations;
 }
 
-function filterSublangs(ttlv, namedTranslations) {
+function filterSublangs(transSublangEntryOb, namedTranslations) {
   let filteredResult;
 
   const sublangOb = {};
-  const sublangAr = Object.keys(ttlv.sublangs)
-    .filter(x => namedTranslations
-    .map(n => {
-      const sl = n.indexOf("/");
-      const r = n.substring(sl + 1);
-      return r;
-    })
-    .includes(x));
+  const sublangAr = Object.keys(transSublangEntryOb)
+                          .filter(x => namedTranslations.map(n => {
+                              const sl = n.indexOf("/"), r = n.substring(sl + 1);
+                              return r;
+                            }).includes(x)
+                          );
 
   if (sublangAr.length) {
-    sublangAr.forEach(vv => {
-      const tslv = ttlv.sublangs[vv];
+    sublangAr.forEach(sublangName => {
+      const transSubangEntryOb = transSublangEntryOb[sublangName];
 
-      sublangOb[vv] = tslv;
+      sublangOb[sublangName] = transSubangEntryOb;
     });
     filteredResult = sublangOb;
   }
+  
   return filteredResult;
 }
