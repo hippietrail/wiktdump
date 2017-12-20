@@ -2,11 +2,14 @@
 
 const { promisify } = require('util')
 const fs = require('fs')
+const stat = promisify(fs.stat)
 const open = promisify(fs.open)
 const read = promisify(fs.read)
 const close = promisify(fs.close)
 
 const common = require('./common')
+
+const freq = 100000
 
 async function main() {
   try {
@@ -17,37 +20,72 @@ async function main() {
     const revision_size_in_bits = args.do.rev
     const element_size_in_bits = offset_size_in_bits + revision_size_in_bits
 
-    const filepattern = wikipath + args.basename
+    if (element_size_in_bits > 53) {
+      console.log(`element size is ${element_size} bits, which is greater than the maximum 53 bits Javascript can handle`)
+    } else {
+      const filepattern = wikipath + args.basename
 
-    const [raw_fd, pck_fd] = await Promise.all([
-      open(filepattern + '-' + 'off' + '.raw', 'r'),
-      open(filepattern + '-' + 'off' + '.pck', 'r'),
-    ])
+      const [rawlen, pcklen] = (await Promise.all([
+        stat(filepattern + '-' + 'off' + '.raw'),
+        stat(filepattern + '-' + 'off' + '.pck'),
+      ])).map(s => s.size)
 
-    let biggest_rev = -Infinity
+      const number_of_entries = rawlen / 12
 
-    for (let index = 0, done = false; !done; ++index) {
-      const r = await read_and_compare_entry(raw_fd, pck_fd, element_size_in_bits, index, revision_size_in_bits)
-      let prog = false
+      console.log(`stat: raw: ${rawlen.toLocaleString()
+        }, packed: ${pcklen.toLocaleString()
+        }, number of entries: ${number_of_entries.toLocaleString()
+        }, ratio: ${(rawlen / pcklen).toLocaleString()
+        }, left over bits: ${pcklen * 8 - element_size_in_bits * number_of_entries
+        }`)
 
-      if (r.rev > biggest_rev) {
-        biggest_rev = r.rev
-        prog = true
+      const [raw_fd, pck_fd] = await Promise.all([
+        open(filepattern + '-' + 'off' + '.raw', 'r'),
+        open(filepattern + '-' + 'off' + '.pck', 'r'),
+      ])
+
+      let biggest_rev = -Infinity
+
+      for (let index = 0, done = false; !done; ++index) {
+        const r = await read_and_compare_entry(raw_fd, pck_fd, element_size_in_bits, index, revision_size_in_bits)
+        let prog = false
+
+        if (r.rev > biggest_rev) {
+          //console.log("new biggest revision")
+          biggest_rev = r.rev
+          prog = true
+        }
+
+        if (index % freq == 0) {
+          //console.log(`another ${freq} entries compared`)
+          prog = true
+        }
+
+        if (!r.ok) {
+          console.log(`comparison not OK: ${JSON.stringify(r.details, null, "  ")}`)
+          prog = true
+        }
+
+        if (index == number_of_entries - 1) {
+          console.log("final entry")
+          prog = true
+          done = true
+        }
+
+        if (index >= number_of_entries) {
+          console.log(`passed the number of entries by ${index - number_of_entries + 1}`)
+          prog = true
+        }
+
+        if (prog)
+          console.log(`index: ${index.toLocaleString()} : ${r.off.toLocaleString()} + ${r.rev}`)
+
+        if (!r.ok) done = true
       }
 
-      if (index % 100000 == 0 || !r.ok)
-        prog = true
-
-      if (prog)
-        console.log(`index: ${index.toLocaleString()} : ${r.off.toLocaleString()} + ${r.rev}`)
-
-      // TODO distinguish between finishing because we checked all the data
-      // TODO versus finishing due to some error
-      if (!r.ok) done = true
+      close(raw_fd)
+      close(pck_fd)
     }
-
-    close(raw_fd)
-    close(pck_fd)
   
   } catch (e) {
     console.log("caught error in main", e)
@@ -60,12 +98,15 @@ async function read_and_compare_entry(raw_fd, pck_fd, item_size_in_bits, index, 
     read_pck_item(pck_fd, item_size_in_bits, index, revision_size_in_bits),
   ])
 
+  const ok = raw_item.ok && pck_item.ok // read a value from both sources ok
+    && raw_item.od == pck_item.od       // the offsets match
+    && raw_item.rd == pck_item.rd       // the revisions match
+
   return {
-    ok: raw_item.ok && pck_item.ok    // read a value from both sources ok
-      && raw_item.od == pck_item.od   // the offsets match
-      && raw_item.rd == pck_item.rd,  // the revisions match
+    ok,
     off: raw_item.od,
-    rev: raw_item.rd
+    rev: raw_item.rd,
+    details: ok ? undefined : { raw_item, pck_item }
   };
 }
 
@@ -82,7 +123,9 @@ async function read_raw_item(fd, numbytes, index) {
   
   let o = Math.pow(2, 32) * h + l
 
-  return { od:o, rd:r, ok:x.bytesRead == numbytes }
+  let ok = x.bytesRead == numbytes
+
+  return { od: o, rd: r, ok, details: ok ? undefined : { numbytes, bytesread: x.bytesRead } }
 }
 
 async function read_pck_item(fd, numbits, index, revision_size_in_bits) {
@@ -117,7 +160,9 @@ async function read_pck_item(fd, numbits, index, revision_size_in_bits) {
 
   const u = unpack(h, l, revision_size_in_bits)
 
-  return { od: u.o, rd: u.r, ok: x.bytesRead == 8 }
+  const ok = x.bytesRead == 8
+
+  return { od: u.o, rd: u.r, ok, details: ok ? undefined : { bytesread: x.bytesRead } }
 }
 
 // unpack offset and revision from packed dump offset struct

@@ -614,7 +614,8 @@ function gotPageInfo(opts, pageInfo) {
   console.log(pageInfo);
 }
 
-function gotArticle(opts, article) {
+function gotArticle(opts, rawArticle) {
+  const article = decodeEntities(rawArticle);
   let prologAndLangSections;
 
   if ("getNumLangs" in opts) {
@@ -742,25 +743,29 @@ function gotArticle(opts, article) {
   }
 
   if ("fullRaw" in opts) {
-    console.log(article.replace(/&[^;]*;/g, t => {
-      const k = t.substring(1, t.length - 1);
-
-      const x = {
-        amp: "&",
-        //apos: "'",
-        gt: ">",
-        lt: "<",
-        quot: "\"",
-      }
-
-      if (k in x) return x[k];
-
-      console.warn(`** can't ampersand decode ${t}`);
-
-      return t;
-    }));
+    console.log(article);
   }
 };
+
+function decodeEntities(raw) {
+  return raw.replace(/&[^;]*;/g, t => {
+    const k = t.substring(1, t.length - 1);
+
+    const x = {
+      amp: "&",
+      //apos: "'",
+      gt: ">",
+      lt: "<",
+      quot: "\"",
+    }
+
+    if (k in x) return x[k];
+
+    console.warn(`** can't ampersand-decode ${t}`);
+
+    return t;
+  });
+}
 
 function splitArticleIntoPrologAndLangSections(article) {
   let hasArticleProlog = false;
