@@ -93,14 +93,13 @@ async function scanIndexFile(whindex, dir, basename, getval, track) {
 }
 
 // all-idx // st // index
-function getValSt(b, o) {
+function get32BitVal(b, o) {
   const val = b.readUInt32LE(o + 0)
   return val
 }
 
 // all-off // to // title offset
-// TODO this should handle 32-bit all-off files, currently only handles 64-bit
-function getValTo(b, o) {
+function get64BitVal(b, o) {
   const lo = b.readUInt32LE(o + 0), hi = b.readUInt32LE(o + 4)
   return hi * Math.pow(2, 32) + lo
 }
@@ -144,9 +143,12 @@ async function main() {
   console.log(`element count: ${element_count}`)
 
   await Promise.all([
-    scanIndexFile(ob.st, wikipath, baseName, getValSt, trackStTo),
-    scanIndexFile(ob.to, wikipath, baseName, getValTo, trackStTo),
-    scanIndexFile(ob.do, wikipath, baseName, getValDo, trackDo),
+    scanIndexFile(ob.st, wikipath, baseName,
+      get32BitVal, trackStTo),
+    scanIndexFile(ob.to, wikipath, baseName,
+      ob.to.element_size == 8 ? get64BitVal : get32BitVal, trackStTo),
+    scanIndexFile(ob.do, wikipath, baseName,
+      getValDo, trackDo),
   ])
 
   console.log("st", "min", ob.st.min, "max", ob.st.max, "bits needed", bits_needed(ob.st.max))
