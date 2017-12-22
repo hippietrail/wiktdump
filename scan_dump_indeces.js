@@ -11,9 +11,6 @@ const read = promisify(fs.read)
 
 const common = require('./common')
 
-// shallow compare two one-dimensional arrays
-const arrayCompare = (a1, a2) => a1.length == a2.length && a1.every((v,i)=> v === a2[i])
-
 // minimum number of bits needed to represent the given int
 function bits_needed(n) {
   let b = 0
@@ -53,13 +50,14 @@ function verifyIndexFileMetadata(ob) {
   // is dump offset/revision file a multiple of 12 bytes long?
   if (ob.do.s % 12 == 0) {
     // simple ratio between file sizes should be 1:1:3 or 1:2:3
-    const denom = Object.values(ob).map(v => v.s).reduce((a, c) => common.gcd(a, c))
-    const ratio = Object.values(ob).map(v => v.s).map(i => i / denom)
+    const lens = Object.values(ob).map(v => v.s)
+    const denom = lens.reduce((a, c) => common.gcd(a, c))
+    const ratio = lens.map(i => i / denom)
 
-    if (arrayCompare(ratio, [1,1,3])) {
+    if (common.arrayCompare(ratio, [1,1,3])) {
       console.log("32-bit title (non-mac)")
       all_off_int_size = 4
-    } else if (arrayCompare(ratio, [1,2,3])) {
+    } else if (common.arrayCompare(ratio, [1,2,3])) {
       console.log("64-bit title (mac)")
       all_off_int_size = 8
     }
@@ -101,6 +99,7 @@ function getValSt(b, o) {
 }
 
 // all-off // to // title offset
+// TODO this should handle 32-bit all-off files, currently only handles 64-bit
 function getValTo(b, o) {
   const lo = b.readUInt32LE(o + 0), hi = b.readUInt32LE(o + 4)
   return hi * Math.pow(2, 32) + lo

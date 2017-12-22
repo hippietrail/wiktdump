@@ -4,6 +4,8 @@ const fs = require('fs'),
     util = require('util'),
   Bunzip = require('seek-bzip');
 
+const common = require('./common');
+
 function processCommandline(thenCallback) {
   if (process.argv.length >= 6) {  // 0 is node.exe, 1 is wikibsearch.js
 
@@ -135,31 +137,28 @@ function getPaths(opts, thenCallback) {
 
 function sanityCheck(opts, dump, searchTerm, thenCallback) {
   let sane = false;
+
+  const gotBzAndZt = ["bz", "zt"].every(f => ["fd", "byteLen"].every(v => v in dump.files[f]));
   
-  const gotBz = "fd" in dump.files.bz && "byteLen" in dump.files.bz;
-  const gotZt = "fd" in dump.files.zt && "byteLen" in dump.files.zt;
+  if (dump.type === "xml"|| (dump.type === "bz2" && gotBzAndZt)) {
+    // is dump offset/revision file a multiple of 12 bytes long?
+    if (dump.files.do.byteLen % 12 == 0) {
+      // simple ratio between file sizes should be 1:1:3 or 1:2:3
+      const lens = ["st", "to", "do"].map(f => dump.files[f].byteLen);
+      const denom = lens.reduce((a, c) => common.gcd(a, c))
+      const ratio = lens.map(i => i / denom)
 
-  if (dump.type === "xml"|| (dump.type === "bz2" && gotBz && gotZt)) {
-    // how it always should be, but isn't on mac
-    if (dump.files.to.byteLen / dump.files.st.byteLen === 4 / 4
-      && dump.files.to.byteLen % 4 === 0
-      && dump.files.do.byteLen / dump.files.to.byteLen === 12 / 4) {
-
+      if (common.arrayCompare(ratio, [1,1,3])) {
         opts.debug && console.log("sane non-mac index");
-      
+
         sane = true;
         dump.sizeof_txt_told = 4;
+      } else if (common.arrayCompare(ratio, [1,2,3])) {
+        opts.debug && console.log("sane mac index");
 
-    // on macOS sizeof poff 8 roff 4 txt_told 8 index (int) 4
-    } else if (
-      dump.files.to.byteLen / dump.files.st.byteLen === 8 / 4
-        && dump.files.to.byteLen % 8 === 0
-        && dump.files.do.byteLen / dump.files.to.byteLen === 12 / 8) {
-
-      opts.debug && console.log("sane mac index");
-
-      sane = true;
-      dump.sizeof_txt_told = 8;
+        sane = true;
+        dump.sizeof_txt_told = 8;
+      }
     }
   }
 
@@ -527,14 +526,18 @@ processCommandline(opts => {
     // open dump file and index files
 
     dump.files = {
-      d:  { desc: 'dump',            fmt: '%s%s' + opts.wikiProj + '-%d-pages-articles.xml' },
-      do: { desc: 'dump offsets',    fmt: '%s%s%d-off.raw' },
-      t:  { desc: 'titles',          fmt: '%s%s%d-all.txt' },
-      to: { desc: 'title offsets',   fmt: '%s%s%d-all-off.raw' },
-      st: { desc: 'sorted titles',   fmt: '%s%s%d-all-idx.raw' },
+      d:  { desc: 'dump',                 fmt: '%s%s' + opts.wikiProj + '-%d-pages-articles.xml' },
+      do: { desc: 'dump offsets',         fmt: '%s%s%d-off.raw' },
+      t:  { desc: 'titles',               fmt: '%s%s%d-all.txt' },
+      to: { desc: 'title offsets',        fmt: '%s%s%d-all-off.raw' },
+      st: { desc: 'sorted titles',        fmt: '%s%s%d-all-idx.raw' },
 
-      bz: { desc: 'compressed dump', fmt: '%s%s' + opts.wikiProj + '-%d-pages-articles.xml.bz2' },
-      zt: { desc: 'bzip table',      fmt: '%s%s%d-table.txt' },
+      bz: { desc: 'compressed dump',      fmt: '%s%s' + opts.wikiProj + '-%d-pages-articles.xml.bz2' },
+      zt: { desc: 'bzip table',           fmt: '%s%s%d-table.txt' },
+
+      dp: { desc: 'packed dump offsets',  fmt: '%s%s%d-off.pck' },
+      tp: { desc: 'packed title offsets', fmt: '%s%s%d-all-off.pck' },
+      sp: { desc: 'packed sorted titles', fmt: '%s%s%d-all-idx.pck' },
     };
 
     let left = Object.keys(dump.files).length;

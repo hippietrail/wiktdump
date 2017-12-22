@@ -46,41 +46,25 @@ async function main() {
 
       let biggest_rev = -Infinity
 
-      for (let index = 0, done = false; !done; ++index) {
+      for (let cont = true, index = 0; cont && index < number_of_entries; ++index) {
         const r = await read_and_compare_entry(raw_fd, pck_fd, element_size_in_bits, index, revision_size_in_bits)
         let prog = false
 
-        if (r.rev > biggest_rev) {
-          //console.log("new biggest revision")
-          biggest_rev = r.rev
-          prog = true
-        }
+        if (r.rev > biggest_rev) biggest_rev = r.rev, prog = true
 
-        if (index % freq == 0) {
-          //console.log(`another ${freq} entries compared`)
-          prog = true
-        }
+        if (index % freq == 0) prog = true
 
         if (!r.ok) {
           console.log(`comparison not OK: ${JSON.stringify(r.details, null, "  ")}`)
           prog = true
         }
 
-        if (index == number_of_entries - 1) {
-          console.log("final entry")
-          prog = true
-          done = true
-        }
-
-        if (index >= number_of_entries) {
-          console.log(`passed the number of entries by ${index - number_of_entries + 1}`)
-          prog = true
-        }
+        if (index == number_of_entries - 1) prog = true
 
         if (prog)
           console.log(`index: ${index.toLocaleString()} : ${r.off.toLocaleString()} + ${r.rev}`)
 
-        if (!r.ok) done = true
+        if (!r.ok) cont = false
       }
 
       close(raw_fd)
@@ -183,43 +167,6 @@ function unpack(h, l, revision_size_in_bits) {
   let o = Math.pow(2, 32) * h + l
 
   return { o, r }
-}
-
-// dump Buffer to log as sequence of 8-bit binary strings
-const bufToBin = (b, len = 64) => b.reduce((acc, cur, i) => {
-  if (typeof len === "undefined" || i < len) {
-    let bin = cur.toString(2)
-    bin = '0'.repeat(8 - bin.length) + bin
-    acc.push(bin)
-  }
-  return acc
-}, []).join(' ')
-
-function to_bits(x, l=32) {
-  let b = x.toString(2)
-  //console.log({x, l, b, bl:b.length, z:l - b.length})
-  let bits = "0".repeat(l/*32*/ - b.length) + b
-
-  let arr = []
-  while (true) {
-    let x = bits.substr(-8)
-    if (x.length) arr.unshift(x)
-    if (x.length == 8)
-      bits = bits.substring(0, bits.length - 8)
-    else
-      break
-  }
-
-  return arr.join('-')
-}
-
-function hl_to_bits(h, l) {
-  let b = h.toString(2)
-  let bits = "0".repeat(32 - b.length) + b
-  b = l.toString(2)
-  bits += "-" + "0".repeat(32 - b.length) + b
-
-  return bits
 }
 
 main()

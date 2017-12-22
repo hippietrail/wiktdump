@@ -99,35 +99,12 @@ module.exports = {
     return opts
   },
 
-  oldParseArgs: function() {
-    switch (process.argv.length) {
-      // en20171201
-      // en-20171201
-      // enwiktionary20171201
-      // en-wiktionary-20171201
-      case 3: {
-        const [ m, l, p, d ] = process.argv[2].match(/^([a-z][a-z][a-z]??)-?(?:([a-z]*?)-?)?(\d\d\d\d\d\d\d\d)$/)
-        if (m) return { basename: l + d }
-        break
-      }
-      case 4:
-        // en 20171201
-        if (/^[a-z][a-z][a-z]?$/.test(process.argv[2]) && /^\d\d\d\d\d\d\d\d$/.test(process.argv[3]))
-          return { basename: process.argv[2] + process.argv[3] }
-        break
-      case 5:
-        // en wiktionary 2017 (ignoring wiktionary)
-        if (/^[a-z][a-z][a-z]?$/.test(process.argv[2]) && /^[a-z]+$/.test(process.argv[3]) && /^\d\d\d\d\d\d\d\d$/.test(process.argv[4]))
-          return { basename: process.argv[2] + process.argv[4] }
-        break
-      default:
-        throw "bad commandline args"
-    }
-  },
-
   // greatest common denominator
   gcd: gcd,
 
   // lowest common multiple
   lcm: (a, b) => a * b / gcd(a, b),
+
+  // shallow compare two one-dimensional arrays
+  arrayCompare: (a, b) => a.length == b.length && a.every((v,i)=> v === b[i])
 }  
