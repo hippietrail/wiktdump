@@ -926,16 +926,16 @@ function parseTransDirectEntries(langName, langItemsRaw) {
   
   let mch;
 
-  arr = langItemsRaw.match(/\[\[.*?\]\] {{g\|.}} {{qualifier\|.*?}}/g);
+  arr = langItemsRaw.match(/\[\[.*?\]\](?: {{g\|.}})? {{qualifier\|.*?}}/g);
 
   if (arr) return arr.map(tr => matchTNonTemplate(tr));
 
   mch = langName.match(/^{{ttbc\|([a-z][a-z][a-z]?)}}$/);
 
   if (mch && mch[1])
-    return { code: mch[1], err: langItemsRaw, line: 928 }
+    return { code: mch[1], err: langItemsRaw, line: 936 }
 
-  return { name: langName, err: langItemsRaw, line: 930 };
+  return { name: langName, err: langItemsRaw, line: 938 };
 }
 
 function parseTransSublangs(langName, sublangsRaw) {
@@ -1114,9 +1114,9 @@ function parseTemplate(temp) {
 
 // before translations were done with {{templates}} they were done with [[wikilinks]] 
 function matchTNonTemplate(nonTemp) {
-  const [, w, g, q] = nonTemp.match(/\[\[(.*?)\]\] {{g\|(.)}} {{qualifier\|(.*)?}}/);
+  const [, w, a, g, q] = nonTemp.match(/\[\[([^#]*?)(?:#.*?\|(.*?))?\]\](?: {{g\|(.)}})? {{qualifier\|(.*)?}}/);
 
-  return { w, g: [g], q }
+  return { w, alt: a & a !== w ? a : undefined, g: g ? [g] : undefined, q }
 }
 
 function filterTranslations(parsedTranslations, namedTranslations) {

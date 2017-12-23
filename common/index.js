@@ -41,6 +41,7 @@ module.exports = {
 
           if (lk == "all-idx") sk = "st"
           else if (lk == "all-off") sk = "to"
+          else if (lk == "debug") sk = "d"
           else if (lk == "dump-offsets") sk = "do"
           else if (lk == "off") sk = "do"
           else if (lk == "sorted-titles") sk = "st"
@@ -48,7 +49,8 @@ module.exports = {
         } else
           [ sk, v ] = arg.substr(1).split("=");
 
-        if (sk == "do") {
+        if (sk == "d") opts.debug = true
+        else if (sk == "do") {
           const m = v.match(/^(\d+):(\d+)$/)
           if (m)
             opts.do = { off: +m[1], rev: +m[2] }
