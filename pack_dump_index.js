@@ -44,36 +44,62 @@ async function main() {
   }
 }
 
-async function pack_off(filepattern, element_size_in_bits, offset_size_in_bits, revision_size_in_bits) {
-  const [infd, outfd] = await Promise.all([
-    open(filepattern + '-' + 'off' + '.raw', 'r'),
-    open(filepattern + '-' + 'off' + '.pck', 'w'),
-  ])
+async function packedFileCreate(filename, element_size_in_bits) {
+  const pf = {}
+  
+  const o = open(filename, 'w')
 
-  const bigbuf_bitlen = common.lcm(64, element_size_in_bits)
-  const bigbuf_bytelen = Math.floor(bigbuf_bitlen / 8)
-  const bigbuf = new Buffer(bigbuf_bytelen + 7) // add padding so we can write 64 bits when when there's less than 8 bytes left
+  pf.buf_bitlen = common.lcm(64, element_size_in_bits)
+  pf.buf_bytelen = Math.floor(pf.buf_bitlen / 8)
+  pf.buf = new Buffer(pf.buf_bytelen + 7) // add padding so we can write 64 bits when when there's less than 8 bytes left
 
-  console.warn(`offset size in bits: ${offset_size_in_bits}`)
-  console.warn(`revision size in bits: ${revision_size_in_bits}`)
-  console.warn(`element size in bits: ${element_size_in_bits}`)
-  console.warn(`bigbuf bitlen: ${bigbuf_bitlen}`)
-  console.warn(`bigbuf bytelen: ${bigbuf_bytelen}`)
-  console.warn(`bitlen / 64 = ${bigbuf_bitlen / 64}, bitlen / element size in bits = ${bigbuf_bitlen / element_size_in_bits}`)
-
-  let bigbuf_offset = {
+  pf.buf_offset = {
     bytes: 0,
     bits: 0,
     total: 0
   }
 
+  //console.warn(`offset size in bits: ${offset_size_in_bits}`)
+  //console.warn(`revision size in bits: ${revision_size_in_bits}`)
+  console.warn(`element size in bits: ${element_size_in_bits}`)
+  console.warn(`bigbuf bitlen: ${pf.buf_bitlen}`)
+  console.warn(`bigbuf bytelen: ${pf.buf_bytelen}`)
+  console.warn(`bitlen / 64 = ${pf.buf_bitlen / 64}, bitlen / element size in bits = ${pf.buf_bitlen / element_size_in_bits}`)
+
+  pf.fd = await o
+
+  return pf
+}
+
+async function packedFileClose(pf) {
+  await packedFileFlush(pf)
+  await close(pf.fd)
+}
+
+async function packedFileFlush(pf) {
+  console.warn(pf.buf_offset)
+  console.warn(bufToBin(pf.buf, pf.buf_bytelen))
+
+  if (pf.buf_offset.total) {
+    const bytesToFlush = pf.buf_offset.bytes + (pf.buf_offset.bits !== 0)
+    const { bytesWritten: bytesFlushed } = await write(pf.fd, pf.buf, 0, bytesToFlush)
+    console.warn("do", bytesToFlush, bytesFlushed)
+  }
+}
+
+async function pack_off(filepattern, element_size_in_bits, offset_size_in_bits, revision_size_in_bits) {
+  const [infd, outpf] = await Promise.all([
+    open(filepattern + '-' + 'off' + '.raw', 'r'),
+    packedFileCreate(filepattern + '-' + 'off' + '.pck', element_size_in_bits),
+  ])
+
   const inbuf = new Buffer(12)
   let bytesRead
   let i = 0
 
-  const f1 = bigbuf_bitlen / element_size_in_bits * 5000
-  const f2 = bigbuf_bitlen / element_size_in_bits - 1
- 
+  const f1 = outpf.buf_bitlen / element_size_in_bits * 5000
+  const f2 = outpf.buf_bitlen / element_size_in_bits - 1
+
   while (true) {
     const logThisOne = (i % f1) == f2
 
@@ -82,35 +108,18 @@ async function pack_off(filepattern, element_size_in_bits, offset_size_in_bits, 
       revision_size_in_bits,
     )
 
-    if (rap.ok) {
-      const packed = rap.packed
-      await output_element_via_buffer(outfd, bigbuf, packed,
-        element_size_in_bits,
-        bigbuf,
-        bigbuf_offset,
-        bigbuf_bytelen,
-        bigbuf_bitlen,
-        logThisOne,
-        "dump offset",
-        i,
-      )
-    } else {
-      console.warn(bigbuf_offset)
-      console.warn(bufToBin(bigbuf, bigbuf_bytelen))
+    if (!rap.ok)
+      break
 
-      // flush
-      if (bigbuf_offset.total) {
-        const bytesToFlush = bigbuf_offset.bytes + (bigbuf_offset.bits !== 0)
-        const { bytesWritten: bytesFlushed } = await write(outfd, bigbuf, 0, bytesToFlush)
-        console.warn("do", bytesToFlush, bytesFlushed)
-      }
-      break;
-    }
+    await packedFileWrite(
+      outpf, rap.packed, element_size_in_bits,
+      logThisOne, "dump offset", i,
+    )
 
     ++i
   }
 
-  await Promise.all([close(infd), close(outfd)])
+  await Promise.all([close(infd), packedFileClose(outpf)])
 }
 
 async function read_and_pack_dump_offset(infd, inbuf,
@@ -181,7 +190,6 @@ async function pack_all_off(filepattern, element_size_in_bits) {
       const packed = rap.packed
       await output_element_via_buffer(outfd, bigbuf, packed,
         element_size_in_bits,
-        bigbuf,
         bigbuf_offset,
         bigbuf_bytelen,
         bigbuf_bitlen,
@@ -273,7 +281,6 @@ async function pack_all_idx(filepattern, element_size_in_bits) {
       const packed = rap.packed
       await output_element_via_buffer(outfd, bigbuf, packed,
         element_size_in_bits,
-        bigbuf,
         bigbuf_offset,
         bigbuf_bytelen,
         bigbuf_bitlen,
@@ -322,9 +329,55 @@ async function read_and_pack_title_index(infd, inbuf,
 
 main()
 
-async function output_element_via_buffer(fd, uint64, ele,
+async function packedFileWrite(
+  pf, ele, ele_bitlen,
+  logThisOne, wh, index,
+) {
+  let h = Math.floor(ele / Math.pow(2, 32))
+  let l = ele % Math.pow(2, 32)
+
+  const left = 64 - ele_bitlen - pf.buf_offset.bits
+
+  if (left > 31) {
+    h = l << (left - 64) >>> 0
+    l = 0
+  } else {
+    h = ((h << left) | (l >>> (32 - left))) >>> 0
+    l = (l << left) >>> 0
+  }
+
+  if (!pf.buf_offset.bits)
+    pf.buf.writeUInt32BE(h, pf.buf_offset.bytes)
+  else
+    orUInt32BE(pf.buf, h, pf.buf_offset.bytes)
+
+  pf.buf.writeUInt32BE(l, pf.buf_offset.bytes + 4)
+
+  pf.buf_offset.total += ele_bitlen
+  pf.buf_offset.bytes = Math.floor(pf.buf_offset.total / 8)
+  pf.buf_offset.bits = pf.buf_offset.total % 8
+
+  if (logThisOne) {
+    console.warn(`${wh}: ${index.toLocaleString()}\n${bufToBin(pf.buf, pf.buf_bytelen)}`)
+  }
+
+  if (pf.buf_offset.total === pf.buf_bitlen) {
+    await write(pf.fd, pf.buf, 0, pf.buf_bytelen)
+
+    pf.buf_offset.total = 0
+    pf.buf_offset.bytes = 0
+    pf.buf_offset.bits = 0
+
+    // zero the buffer since we OR into it
+    // for some reason this doesn't work: pf.buf.map(e => 0)
+    if (pf.buf_offset.total === 0)
+      for (let i = 0; i < pf.buf_bytelen; ++i)
+        pf.buf[i] = 0
+  }
+}
+
+async function output_element_via_buffer(fd, bigbuf, ele,
   ele_bitlen,
-  bigbuf,
   bigbuf_offset,
   bigbuf_bytelen,
   bigbuf_bitlen,
@@ -346,11 +399,11 @@ async function output_element_via_buffer(fd, uint64, ele,
   }
 
   if (!bigbuf_offset.bits)
-    uint64.writeUInt32BE(h, bigbuf_offset.bytes)
+    bigbuf.writeUInt32BE(h, bigbuf_offset.bytes)
   else
-    orUInt32BE(uint64, h, bigbuf_offset.bytes)
+    orUInt32BE(bigbuf, h, bigbuf_offset.bytes)
 
-  uint64.writeUInt32BE(l, bigbuf_offset.bytes + 4)
+  bigbuf.writeUInt32BE(l, bigbuf_offset.bytes + 4)
 
   bigbuf_offset.total += ele_bitlen
   bigbuf_offset.bytes = Math.floor(bigbuf_offset.total / 8)
