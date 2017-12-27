@@ -588,7 +588,7 @@ function processFiles(opts, dump, searchTerm) {
         if (opts.debug)
           console.log('"' + searchTerm + '" found at ' + result.a);
         else
-        console.log('"' + searchTerm + '"');
+          console.log('"' + searchTerm + '"');
 
         if ("getPageInfo" in opts) {
           var pageInfo = getPageInfo(dump, result.a, pageInfo => {
@@ -596,7 +596,7 @@ function processFiles(opts, dump, searchTerm) {
           });
         } else {
           var article = getArticle(dump, result.a, article => {
-            gotArticle(opts, article);
+            gotArticle(opts, article, searchTerm);
           });
         }
       });
@@ -614,10 +614,60 @@ function processFiles(opts, dump, searchTerm) {
 }
 
 function gotPageInfo(opts, pageInfo) {
-  console.log(pageInfo);
+  const lines = pageInfo.split("\n");
+
+  const info = {};
+  let stack = [];
+  let where = info;
+
+  for (let i = 0; i < lines.length; ++i) {
+    const l = lines[i];
+    const m = l.match(/^( *)<(\/)?([^>]*?)( \/)?>(?:([^<]*)<\/([^>]*)>)?$/);
+
+    if (m) {
+      const [, ind, sl1, ot, sl2, cont, ct ] = m;
+
+      // remove named keys and elements with undefined values
+      const ob = JSON.parse(JSON.stringify({ ind:ind.length/2-1, sl1, ot, sl2, cont, ct }));
+      const nk = Object.keys(ob).length;
+      let type = "unknown";
+
+      if ("ot" in ob && nk == 2) type = "open tag";
+      else if ("ot" in ob && "cont" in ob && "ct" in ob && nk == 4) type = "full element";
+      else if ("sl1" in ob && "ot" in ob && nk == 3) type = "close tag";
+      else if ("ot" in ob && "sl2" in ob && nk == 3) type = "empty tag";
+      else throw "parse error type 1 in pageinfo";
+
+      switch (type) {
+        case "open tag":
+          where[ot] = {};
+          where = where[ot];
+          stack.push(where);
+          break;
+        case "full element":
+          where[ot] = Number.isNaN(Number(cont)) ? cont : +cont;
+          if (ot == "timestamp") {
+            where["_" + ot] = /*new Date(Date.now() - Date.parse(where[ot]))*/timeDiffFrom(Date.parse(where[ot]))
+          }
+          break;
+        case "close tag":
+          stack.pop();
+          where = stack[ stack.length - 1 ]
+          break;
+        case "empty tag":
+          where[ot] = true;
+          break;
+        default:
+          throw "parse error type 2 in pageinfo";
+      }
+    } else {
+      throw "parse error type 3 in pageinfo";
+    }
+  }
+  console.log(JSON.stringify(info, null, "  "));
 }
 
-function gotArticle(opts, rawArticle) {
+function gotArticle(opts, rawArticle, pageTitle) {
   const article = decodeEntities(rawArticle);
   let prologAndLangSections;
 
@@ -638,7 +688,7 @@ function gotArticle(opts, rawArticle) {
     
     if (prologAndLangSections.prolog) langNames.unshift("prolog");
 
-    console.log(`language sections: ${langNames}`)
+    console.log(`language sections: ${langNames}`);
   }
 
   if ("getNamedLangs" in opts) {
@@ -728,7 +778,7 @@ function gotArticle(opts, rawArticle) {
             else
               filteredTranslations = parsedTranslations;
 
-            console.log(JSON.stringify(filteredTranslations, null, "  "))
+            console.log(JSON.stringify(filteredTranslations, null, "  "));
           } else {
             if (j === 0) console.log("!!!!!!!!!!!!!");
             console.log(`/-------${j}-------\\`);
@@ -977,7 +1027,7 @@ function parseTransSublangs(langName, sublangsRaw) {
 
   const obj = subs.reduce((acc, cur) => {
     // TODO why does this never happen?
-    if (("tarr" in cur) && ("subs" in cur)) console.log("** 976 cur has both tarr and subs")
+    if (("tarr" in cur) && ("subs" in cur)) console.log("** 1030 cur has both tarr and subs");
     acc[cur.subname] = cur.tarr || cur.subs;
     return acc;
   }, {});
@@ -1174,4 +1224,30 @@ function filterSublangs(transSublangEntryOb, namedTranslations) {
   }
   
   return filteredResult;
+}
+
+function timeDiffFrom(backThen) {
+  let howOld = "";
+
+  if (backThen) {
+    const ms = new Date() - backThen;
+    const s = ms / 1000;
+    const min = s / 60;
+    const h = min / 60;
+    const d = h / 24;
+    const w = d / 7;
+    const mon = w / 30.5;
+
+    if (mon >= 1) howOld = "about " + (mon * 2).toFixed(0) / 2 + " months ago";
+    else if (w >= 1) howOld = "about " + (w * 2).toFixed(0) / 2 + " weeks ago";
+    else if (d >= 1) howOld = "about " + (d * 2).toFixed(0) / 2 + " days ago";
+    else if (h >= 1) howOld = "about " + (h * 2).toFixed(0) / 2 + " hours ago";
+    else if (min >= 1)
+      howOld = "about " + (min * 2).toFixed(0) / 2 + " minutes ago";
+    else if (s >= 30)
+      howOld = "about " + (s * 2).toFixed(0) / 2 + " seconds ago";
+    else howOld = "moments ago";
+  }
+
+  return howOld;
 }
