@@ -21,24 +21,30 @@ function processCommandline(thenCallback) {
         if (arg.charAt(1) === '-') {
           let [ db, val ] = arg.substr(2).split("=");
 
-          if (db === 'page-info') {
-            opts.getPageInfo = true;
-          } else if (db === 'num-langs') {
-            opts.getNumLangs = true;
+          if (db === 'do') {
+            if (val) opts.dumpOffsetBits = val.split(":");
           } else if (db === 'lang-names') {
             opts.getLangNames = true;
           } else if (db === 'named-langs' || db === 'named-languages') {
             if (val) opts.getNamedLangs = val.split(",");
-          } else if (db === 'num-sections') {
-            opts.getNumSections = true;
-          } else if (db === 'section-names') {
-            opts.getSectionNames = true;
           } else if (db === 'named-sections') {
             if (val) opts.getNamedSections = val.split(",");
-          } else if (db === 'parse-translations') {
-            opts.parseTranslations = true;
           } else if (db === 'named-translations') {
             if (val) opts.getNamedTranslations = val.split(",");
+          } else if (db === 'num-langs') {
+            opts.getNumLangs = true;
+          } else if (db === 'num-sections') {
+            opts.getNumSections = true;
+          } else if (db === 'page-info') {
+            opts.getPageInfo = true;
+          } else if (db === 'parse-translations') {
+            opts.parseTranslations = true;
+          } else if (db === 'section-names') {
+            opts.getSectionNames = true;
+          } else if (db === 'st') {
+            if (val) opts.titleIndexBits = val;
+          } else if (db === 'to') {
+            if (val) opts.titleOffsetBits = val;
           } else {
             console.log(`unknown double-hyphen switch: ${db}`);
           }
@@ -78,7 +84,7 @@ function processCommandline(thenCallback) {
 }
 
 function getPaths(opts, thenCallback) {
-  // cross-platform for at least Windows and *nix (but possibly not Mac OS X)
+  // cross-platform for at least Windows and *nix including Mac OS X
   // http://stackoverflow.com/questions/9080085/node-js-find-home-directory-in-platform-agnostic-way
   var home = process.env[(process.platform == 'win32') ? 'USERPROFILE' : 'HOME'],
       wikipathpath = home + '/.wikipath';
@@ -148,6 +154,38 @@ function sanityCheck(opts, dump, searchTerm, thenCallback) {
       const denom = lens.reduce((a, c) => common.gcd(a, c))
       const ratio = lens.map(i => i / denom)
 
+      // can we check the ratio between file sizes for packed index files too?
+      const plens = ["sp", "tp", "dp"].map(f => dump.files[f].byteLen);
+      const pdenom = plens.reduce((a, c) => common.gcd(a, c))
+      const pratio = plens.map(i => i / pdenom)
+
+      console.log("packed lengths:", plens)
+      console.log("packed denominator:", pdenom)
+      console.log("packed ratio:", pratio)
+
+      /*
+      const gcds = new Set();
+      for (let ii = -7; ii < 1; ++ii) {
+        for (let jj = -7; jj < 1; ++jj) {
+          const aa = dump.files.sp.byteLen + ii;
+          const bb = dump.files.to.byteLen + jj;
+          const gcd = common.gcd(aa, bb);
+          //console.log(`...${aa} ${bb} ${gcd}`);
+          gcds.add(+gcd)
+        }
+      }
+      console.log(Array.from(gcds).sort((a,b) => b-a));
+      console.log(Array.from(gcds).sort((a,b) => b-a).slice(0,8));
+      Array.from(gcds).sort((a,b) => b-a).slice(0,8).forEach(kk => {
+        console.log(kk)
+        for (let ll = -7; ll < 1; ++ll) {
+          const cc = dump.files.dp.byteLen + ll;
+          const gcd = common.gcd(kk, cc);
+          console.log(`:::${kk} ${cc} ${gcd}`)
+        }
+      });
+      */
+
       if (common.arrayCompare(ratio, [1,1,3])) {
         opts.debug && console.log("sane non-mac index");
 
@@ -183,6 +221,7 @@ function getTitle(dump, indexS, gotTitle) {
     }
   } else {
     // st: sorted titles all-idx.raw
+    // TODO support packed versions
     fs.read(dump.files.st.fd, indexR, 0, 4, indexS * 4, (err, bytesRead, data) => {
       if (!err && bytesRead === 4) {
         indexR = data.readUInt32LE(0);
@@ -190,6 +229,7 @@ function getTitle(dump, indexS, gotTitle) {
         if (indexR < 0 || indexR >= haystackLen) throw 'raw index ' + indexR + ' out of range (sorted index ' + indexS + ')';
 
         // to: title offsets all-off.raw
+        // TODO support packed versions
         fs.read(dump.files.to.fd, offset, 0, dump.sizeof_txt_told, indexR * dump.sizeof_txt_told, (err, bytesRead, data) => {
           if (!err && bytesRead === dump.sizeof_txt_told) {
             const lower = data.readUInt32LE(0);
@@ -234,6 +274,7 @@ function getPageInfo(dump, indexS, gotPageInfo) {
     }
   } else {
     // st: sorted titles all-idx.raw
+    // TODO support packed versions
     fs.read(dump.files.st.fd, indexR, 0, 4, indexS * 4, (err, bytesRead, data) => {
       if (!err && bytesRead === 4) {
         indexR = data.readUInt32LE(0);
@@ -241,6 +282,7 @@ function getPageInfo(dump, indexS, gotPageInfo) {
         if (indexR < 0 || indexR >= haystackLen) throw 'raw index ' + indexR + ' out of range (sorted index ' + indexS + ')';
 
         // do: dump offsets off.raw
+        // TODO support packed versions
         fs.read(dump.files.do.fd, record, 0, 12, indexR * 12, (err, bytesRead, data) => {
           if (!err && bytesRead === 12) {
             var lower, upper, offset, revisionOffset;
@@ -309,6 +351,7 @@ function getArticle(dump, indexS, gotArticle) {
     }
   } else {
     // st: sorted titles all-idx.raw
+    // TODO support packed versions
     fs.read(dump.files.st.fd, indexR, 0, 4, indexS * 4, (err, bytesRead, data) => {
       if (!err && bytesRead === 4) {
         indexR = data.readUInt32LE(0);
@@ -316,6 +359,7 @@ function getArticle(dump, indexS, gotArticle) {
         if (indexR < 0 || indexR >= haystackLen) throw 'raw index ' + indexR + ' out of range (sorted index ' + indexS + ')';
 
         // do: dump offsets off.raw
+        // TODO support packed versions
         fs.read(dump.files.do.fd, record, 0, 12, indexR * 12, (err, bytesRead, data) => {
           if (!err && bytesRead === 12) {
             var lower, upper, offset, revisionOffset;
@@ -647,7 +691,7 @@ function gotPageInfo(opts, pageInfo) {
         case "full element":
           where[ot] = Number.isNaN(Number(cont)) ? cont : +cont;
           if (ot == "timestamp") {
-            where["_" + ot] = /*new Date(Date.now() - Date.parse(where[ot]))*/timeDiffFrom(Date.parse(where[ot]))
+            where["_" + ot] = timeDiffFrom(Date.parse(where[ot]))
           }
           break;
         case "close tag":
@@ -750,6 +794,8 @@ function gotArticle(opts, rawArticle, pageTitle) {
       });
 
       console.log(`"${opts.searchTerm}" / ${langName} / sections: ${sectionNames}`);
+
+      getSectionStructure(langName, sectionNames);
     }
   }
 
@@ -872,6 +918,52 @@ function splitLangSectionIntoSections(langSection) {
     retval.sections.push({ index: j, heading, body });
   }
   return retval;
+}
+
+function getSectionStructure(langName, sections) {
+  const result = {}, body = {};
+
+  result[langName] = body;
+
+  let prev_depth = 2;
+  let prev_ele = body;
+  let curr_parent = body;
+
+  for (let i = 0; i < sections.length; ++i) {
+    const [depth, name] = sections[i];
+
+    const ele = {};
+    sections[i][2] = ele;
+
+    let where = null;
+
+    if (depth == prev_depth)
+      where = curr_parent;
+    else if (depth > prev_depth)
+      where = prev_ele;
+    else {//if (depth < prev_depth) {
+      for (let j = i - 1; j >= 0; --j) {
+        if (sections[j][0] < depth) {
+          where = sections[j][2];
+          break;
+        }
+      }
+
+      if (!where) where = body;
+    }
+
+    let nameadj = name;
+    while (nameadj in where)
+      nameadj += "'";
+
+    where[nameadj] = ele;
+    curr_parent = where;
+
+    prev_depth = depth;
+    prev_ele = ele;
+  }
+
+  console.log(JSON.stringify(result, null, "  "));
 }
 
 // parse an entire ====Translations==== section
