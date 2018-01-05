@@ -7,6 +7,7 @@ const fs = require('fs'),
 const common = require('./common');
 
 function processCommandline(thenCallback) {
+  // TODO just checking for six or more args is no longer sufficient
   if (process.argv.length >= 6) {  // 0 is node.exe, 1 is wikibsearch.js
 
     const opts = {
@@ -23,6 +24,8 @@ function processCommandline(thenCallback) {
 
           if (db === 'do') {
             if (val) opts.dumpOffsetBits = val.split(":");
+          } else if (db === 'full-faw') {
+            opts.fullRaw = true;
           } else if (db === 'lang-names') {
             opts.getLangNames = true;
           } else if (db === 'named-langs' || db === 'named-languages') {
@@ -39,6 +42,8 @@ function processCommandline(thenCallback) {
             opts.getPageInfo = true;
           } else if (db === 'parse-translations') {
             opts.parseTranslations = true;
+          } else if (db === 'raw-index') {
+            opts.rawIndex = val;
           } else if (db === 'section-names') {
             opts.getSectionNames = true;
           } else if (db === 'st') {
@@ -627,23 +632,12 @@ function processFiles(opts, dump, searchTerm) {
         console.log('"' + searchTerm + '" belongs between "' + before + '" and "' + after + '"');
       };
 
-    if (result.a === result.b) {
-      getTitle(dump, result.a, t => {
-        if (opts.debug)
-          console.log('"' + searchTerm + '" found at ' + result.a);
-        else
-          console.log('"' + searchTerm + '"');
+    let rawIndex;
 
-        if ("getPageInfo" in opts) {
-          var pageInfo = getPageInfo(dump, result.a, pageInfo => {
-            gotPageInfo(opts, pageInfo);
-          });
-        } else {
-          var article = getArticle(dump, result.a, article => {
-            gotArticle(opts, article, searchTerm);
-          });
-        }
-      });
+    if ("rawIndex" in opts) {
+      rawIndex = opts.rawIndex;
+    } else if (result.a === result.b) {
+      rawIndex = result.a;
     } else {
       getTitle(dump, result.a, t => {
         before = t;
@@ -652,6 +646,25 @@ function processFiles(opts, dump, searchTerm) {
       getTitle(dump, result.b, t => {
         after = t;
         if (before) gotNearby();
+      });
+    }
+
+    if (typeof rawIndex != "undefined") {
+      getTitle(dump, rawIndex, t => {
+        if (opts.debug || "rawIndex" in opts)
+          console.log('"' + t + '" is at ' + rawIndex);
+        else
+          console.log('"' + t + '"');
+
+        if ("getPageInfo" in opts) {
+          var pageInfo = getPageInfo(dump, rawIndex, pageInfo => {
+            gotPageInfo(opts, pageInfo);
+          });
+        } else {
+          var article = getArticle(dump, rawIndex, article => {
+            gotArticle(opts, article, searchTerm);
+          });
+        }
       });
     }
   });
@@ -788,12 +801,16 @@ function gotArticle(opts, rawArticle, pageTitle) {
 
       const mch = langsec.match(/^(===+)[^=]*\1/gm);
 
-      const sectionNames = mch.map( foo => {
-        const [ , eq, name ] = foo.match(/^(===+)\s*([^=]*)\s*\1/m);
-        return [ eq.length, name ];
-      });
+      if (mch) {
+        const sectionNames = mch.map( foo => {
+          const [ , eq, name ] = foo.match(/^(===+)\s*([^=]*)\s*\1/m);
+          return [ eq.length, name ];
+        });
 
-      console.log(`"${opts.searchTerm}" / ${langName} / sections: ${sectionNames}`);
+        console.log(`"${opts.searchTerm}" / ${langName} / sections: ${sectionNames}`);
+      } else {
+        console.log("** 815", langsec)
+      }
 
       getSectionStructure(langName, sectionNames);
     }
