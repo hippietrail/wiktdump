@@ -4,6 +4,8 @@ const fs = require('fs'),
     util = require('util'),
   Bunzip = require('seek-bzip');
 
+const exists = util.promisify(fs.exists);
+
 const common = require('./common');
 
 function processCommandline(thenCallback) {
@@ -12,7 +14,6 @@ function processCommandline(thenCallback) {
 
     const opts = {
       wikiPath: "",
-      indexPath: "",
     };
 
     for (let i = 2, a = 2; i < process.argv.length; ++i) {
@@ -92,60 +93,45 @@ function processCommandline(thenCallback) {
   }
 }
 
-function getPaths(opts, thenCallback) {
+function getPaths(thenCallback) {
   // cross-platform for at least Windows and *nix including Mac OS X
   // http://stackoverflow.com/questions/9080085/node-js-find-home-directory-in-platform-agnostic-way
-  var home = process.env[(process.platform == 'win32') ? 'USERPROFILE' : 'HOME'],
-      wikipathpath = home + '/.wikipath';
+  const home = process.env[(process.platform == 'win32') ? 'USERPROFILE' : 'HOME'],
+        wikipathpath = home + '/.wikipath';
 
   fs.exists(wikipathpath, x => {
     if (x) {
-      var str = fs.createReadStream(wikipathpath, {start: 0, end: 1023});
+      let str = fs.createReadStream(wikipathpath, {start: 0, end: 1023});
+      let wikiPath;
 
-      // TODO ~/.wikipath only has wikiPath - indexPath hardcoded for now!
+      // TODO separate paths for actual dump files and generated index files
       // TODO support multiple wikiPaths and indexPaths
-      // TODO  (I have Wiktionaries on C: and Wikipedia on external harddrive)
-      if (process.platform === 'sunos') {
-        opts.indexPath = '/mnt/user-store/hippietrail/';
-      } else {
-        opts.indexPath = opts.wikiPath;
-      }
+      // TODO huge wikipedia dump in a separate place to smaller wiktionary dumps
 
-      str.on('data', data => {
-        opts.wikiPath = data.toString('utf-8').replace(/^\s*(.*?)\s*$/, '$1');
-      });
+      str.on('data', data => wikiPath = data.toString('utf-8').replace(/^\s*(.*?)\s*$/, '$1'));
 
-      str.on('end', () => {
-        fs.exists(opts.wikiPath, x => {
-          let fullDumpPath;
-
-          if (x) {
-            opts.debug && console.log('path to wikis "' + opts.wikiPath + '" exists');
-
-            const dumpFileName = opts.wikiLang + opts.wikiProj + '-' + opts.wikiDate + '-pages-articles.xml';
-            fullDumpPath = opts.wikiPath + dumpFileName;
-
-            fs.exists(fullDumpPath, x => {
-              if (x) {
-                thenCallback({ fullDumpPath, type: "xml"});
-              } else {
-                fs.exists(fullDumpPath + '.bz2', x => {
-                  if (x) {
-                    thenCallback({ fullDumpPath, type: "bz2"});
-                  } else {
-                    console.error(`neither ${dumpFileName} nor ${dumpFileName}.bz2 exists`);
-                  }
-                });
-              }
-            });
-          } else {
-            console.error('path to wikis "' + opts.wikiPath + '" doesn\'t exist');
-          }
-        });
-      });
-
+      str.on('end', () => thenCallback(wikiPath));
     } else {
       console.error('no ".wikipath" in home');
+    }
+  });
+}
+
+function isDumpPresent(opts, thenCallback) {
+  const dumpFileName = opts.wikiLang + opts.wikiProj + '-' + opts.wikiDate + '-pages-articles.xml';
+  const fullDumpPath = opts.wikiPath + dumpFileName;
+
+  fs.exists(fullDumpPath, x => {
+    if (x) {
+      thenCallback({ fullDumpPath, type: "xml"});
+    } else {
+      fs.exists(fullDumpPath + '.bz2', x => {
+        if (x) {
+          thenCallback({ fullDumpPath, type: "bz2"});
+        } else {
+          console.error(`neither ${dumpFileName} nor ${dumpFileName}.bz2 exists`);
+        }
+      });
     }
   });
 }
@@ -153,8 +139,9 @@ function getPaths(opts, thenCallback) {
 function sanityCheck(opts, dump, searchTerm, thenCallback) {
   let sane = false;
 
+  // to use the bzipped dump file we also need the seek-bzip table file (.zt)
   const gotBzAndZt = ["bz", "zt"].every(f => ["fd", "byteLen"].every(v => v in dump.files[f]));
-  
+
   if (dump.type === "xml"|| (dump.type === "bz2" && gotBzAndZt)) {
     // is dump offset/revision file a multiple of 12 bytes long?
     if (dump.files.do.byteLen % 12 == 0) {
@@ -593,8 +580,9 @@ function bsearch(dump, searchTerm, callback) {
 }
 
 // main
-processCommandline(opts => {
-  getPaths(opts, (dump) => {
+processCommandline(opts => getPaths(wikiPath => fs.exists(wikiPath, x => {
+  opts.wikiPath = wikiPath;
+  isDumpPresent(opts, dump => {
     opts.debug && console.log(`dump "${dump.fullDumpPath}" exists (${dump.type})`);
 
     // open dump file and index files
@@ -622,9 +610,8 @@ processCommandline(opts => {
         // TODO these are never closed!
         fs.open(p, 'r', (err, fd) => {
           if (err) {
-            //console.error('error opening ' + e.desc + ' file): ' + err);
             opts.debug && console.log('... ' + e.desc + ' file NOPE');
-            
+
             if (--left === 0) {
               sanityCheck(opts, dump, opts.searchTerm, processFiles);
             }
@@ -647,8 +634,8 @@ processCommandline(opts => {
         });
       })(dump.files[k]);
     }
-  });
-});
+  })
+})));
 
 function processFiles(opts, dump, searchTerm) {
   if ("rawIndex" in opts) {
@@ -785,7 +772,7 @@ function gotArticle(opts, rawArticle, pageTitle) {
       const [ , langName ] = s.match(/^==\s*([^=]*)\s*==$/m);
       return langName;
     })
-    
+
     if (prologAndLangSections.prolog) langNames.unshift("prolog");
 
     console.log(`language sections: ${langNames}`);
@@ -815,15 +802,15 @@ function gotArticle(opts, rawArticle, pageTitle) {
       }
     }
   }
-        
+
   if ("getNumSections" in opts) {
     if (!prologAndLangSections) prologAndLangSections = splitArticleIntoPrologAndLangSections(article);
-    
+
     const sections = prologAndLangSections.langSections;
-    
+
     for (let i = 0; i < sections.length; i++) {
       const langsec = sections[i];
-      
+
       const [ , langName ] = langsec.match(/^==\s*([^=]*)\s*==$/m);
 
       const mch = langsec.match(/^(===+)[^=]*\1/gm);
@@ -834,12 +821,12 @@ function gotArticle(opts, rawArticle, pageTitle) {
 
   if ("getSectionNames" in opts) {
     if (!prologAndLangSections) prologAndLangSections = splitArticleIntoPrologAndLangSections(article);
-    
+
     const sections = prologAndLangSections.langSections;
-    
+
     for (let i = 0; i < sections.length; i++) {
       const langsec = sections[i];
-      
+
       const [ , langName ] = langsec.match(/^==\s*([^=]*)\s*==$/m);
 
       const mch = langsec.match(/^(===+)[^=]*\1/gm);
@@ -1116,7 +1103,7 @@ function parseTranslationTable(table) {
 
         return acc;
       }, {});
-  
+
       return { check, also, id, gloss, langs: obj2 };
     }
   }
@@ -1127,7 +1114,7 @@ function parseTransDirectEntries(langName, langItemsRaw) {
   let arr = langItemsRaw.match(/{{t.*?}}(?: {{[^t].*?}})?/g);
 
   if (arr) return arr.map(tr => matchTTemplate(tr));
-  
+
   let mch;
 
   arr = langItemsRaw.match(/\[\[.*?\]\](?: {{g\|.}})? {{qualifier\|.*?}}/g);
@@ -1205,7 +1192,7 @@ function parseTTemplate(tt) {
   const p = parseTemplate(tt);
   const o = {};
   let langCode;
-  
+
   Object.entries(p).forEach(e => {
     const [k, v] = e;
 
@@ -1316,7 +1303,7 @@ function parseTemplate(temp) {
   return r.ob;
 }
 
-// before translations were done with {{templates}} they were done with [[wikilinks]] 
+// before translations were done with {{templates}} they were done with [[wikilinks]]
 function matchTNonTemplate(nonTemp) {
   const [, w, a, g, q] = nonTemp.match(/\[\[([^#]*?)(?:#.*?\|(.*?))?\]\](?: {{g\|(.)}})? {{qualifier\|(.*)?}}/);
 
@@ -1343,7 +1330,7 @@ function filterTranslations(parsedTranslations, namedTranslations) {
 
         if ("sublangs" in transLangEntryOb)
           transLangEntryOb.sublangs = filterSublangs(transLangEntryOb.sublangs, namedTranslations);
-        
+
         langOb[langName] = transLangEntryOb;
       });
       acc.push({ ...transTable, langs: langOb });
@@ -1374,7 +1361,7 @@ function filterSublangs(transSublangEntryOb, namedTranslations) {
     });
     filteredResult = sublangOb;
   }
-  
+
   return filteredResult;
 }
 
@@ -1389,15 +1376,15 @@ function timeDiffFrom(backThen) {
     const d = h / 24;
     const w = d / 7;
     const mon = w / 30.5;
+    const y = mon / 12;
 
-    if (mon >= 1) howOld = "about " + (mon * 2).toFixed(0) / 2 + " months ago";
+    if (y >= 1) howOld = "about " + (y * 2).toFixed(0) / 2 + " years ago";
+    else if (mon >= 1) howOld = "about " + (mon * 2).toFixed(0) / 2 + " months ago";
     else if (w >= 1) howOld = "about " + (w * 2).toFixed(0) / 2 + " weeks ago";
     else if (d >= 1) howOld = "about " + (d * 2).toFixed(0) / 2 + " days ago";
     else if (h >= 1) howOld = "about " + (h * 2).toFixed(0) / 2 + " hours ago";
-    else if (min >= 1)
-      howOld = "about " + (min * 2).toFixed(0) / 2 + " minutes ago";
-    else if (s >= 30)
-      howOld = "about " + (s * 2).toFixed(0) / 2 + " seconds ago";
+    else if (min >= 1) howOld = "about " + (min * 2).toFixed(0) / 2 + " minutes ago";
+    else if (s >= 30) howOld = "about " + (s * 2).toFixed(0) / 2 + " seconds ago";
     else howOld = "moments ago";
   }
 
