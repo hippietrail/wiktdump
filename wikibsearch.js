@@ -173,18 +173,27 @@ function sanityCheck(opts, dump, searchTerm, thenCallback) {
       console.log("can use packed title index file", dump.files.sp.byteLen * 8 / opts.titleIndexBits)
   */
 
-  console.log("Number of entries in dump indicated by packed dump files:",
-    [["dp", "dumpOffsetBits"], ["tp", "titleOffsetBits"], ["sp", "titleIndexBits"]].map(
-      p => p[0] in dump.files && p[1] in opts
-      ? [
-          dump.files[p[0]].byteLen,
-          Array.isArray(opts[p[1]])
-            ? opts[p[1]].reduce((a,n) => a+n)
-            : opts[p[1]]
-        ]
-      : false
-    ).map(p => p[0] * 8 / p[1]).reduce((a,n) => Math.floor(a) == Math.floor(n) ? Math.floor(a) : NaN)
-  );
+  // To be able to use the packed dump files we need all three plus the bitsize of their elements specified on the
+  // commandline. We then ensure all files contain the same number of elements.
+  const numEntriesInPackedDump = [["dp", "dumpOffsetBits"], ["tp", "titleOffsetBits"], ["sp", "titleIndexBits"]].map(
+    p => p[0] in dump.files && p[1] in opts
+    ? [
+        dump.files[p[0]].byteLen,
+        Array.isArray(opts[p[1]])
+          ? opts[p[1]].reduce((a,n) => a+n)
+          : opts[p[1]]
+      ]
+    : false
+  ).map(p => p[0] * 8 / p[1]).reduce((a,n) => Math.floor(a) == Math.floor(n) ? Math.floor(a) : NaN);
+
+  console.log("Number of entries in dump indicated by packed dump files:", numEntriesInPackedDump);
+
+  // If the packed dump files are sane, put copies of their element sizes in bits into the dump object
+  if (!Number.isNaN(numEntriesInPackedDump)) {
+    dump.files.dp.eleBitSize = opts.dumpOffsetBits;
+    dump.files.tp.eleBitSize = opts.titleOffsetBits;
+    dump.files.sp.eleBitSize = opts.titleIndexBits;
+  }
 
   if (sane) {
     thenCallback(opts, dump, searchTerm);
@@ -195,8 +204,8 @@ function sanityCheck(opts, dump, searchTerm, thenCallback) {
 
 // get page title by its sorted index (this is the usual way. all page titles in Unicode order)
 function getTitle(dump, indexS, gotTitle) {
-  var haystackLen = dump.files.to.byteLen / dump.sizeof_txt_told;
-  var indexR = new Buffer(4), offset = new Buffer(dump.sizeof_txt_told), title = new Buffer(256);
+  var haystackLen = dump.files.st.byteLen / 4;
+  var indexR = new Buffer(4), title = new Buffer(256);
 
   if (indexS < 0 || indexS >= haystackLen) {
     if (indexS === -1) {
@@ -207,16 +216,56 @@ function getTitle(dump, indexS, gotTitle) {
       throw 'sorted index ' + indexS + ' out of range';
     }
   } else {
-    // st: sorted titles all-idx.raw
-    // TODO support packed versions
-    fs.read(dump.files.st.fd, indexR, 0, 4, indexS * 4, (err, bytesRead, data) => {
-      if (!err && bytesRead === 4) {
-        indexR = data.readUInt32LE(0);
-
-        getTitleByRawIndex(dump, indexR, gotTitle);
-      } else { throw ['indexR', err, bytesRead]; }
-    });
+    if (dump.files.sp.eleBitSize) {
+      indexR = readPackedItem(dump.files.sp.fd, dump.files.sp.eleBitSize, indexS);
+      getTitleByRawIndex(dump, indexR, gotTitle);
+    } else {
+      // st: sorted titles all-idx.raw
+      // TODO support packed versions
+      fs.read(dump.files.st.fd, indexR, 0, 4, indexS * 4, (err, bytesRead, data) => {
+        if (!err && bytesRead === 4) {
+          indexR = data.readUInt32LE(0);
+          console.log("###", indexR);
+          getTitleByRawIndex(dump, indexR, gotTitle);
+        } else { throw ['indexR', err, bytesRead]; }
+      });
+    }
   }
+}
+
+function readPackedItem(fd, numbits, index) {
+  const b = new Buffer(8)
+
+  const offset_bits = numbits * index
+  const offset_bytes = Math.floor(offset_bits / 8)
+  const offset_mod = offset_bits % 8
+
+  const x = fs.readSync(fd, b, 0, 8, offset_bytes)
+
+  // mask off the upper bits that belong to the previous entry
+  if (offset_mod) {
+    const mask = 0xff >> offset_mod
+    b[0] &= mask
+  }
+
+  let h = b.readUInt32BE(0)
+  let l = b.readUInt32BE(4)
+
+  const rightshift = 64 - numbits - offset_mod
+
+  if (rightshift >= 32) {
+    l = h >>> (rightshift - 64)
+    h = 0
+  } else if (rightshift != 0) {
+    const t = (h << (32 - rightshift)) >>> 0
+    h >>>= rightshift
+    l >>>= rightshift
+    l = (l | t) >>> 0
+  }
+
+  let val = Math.pow(2, 32) * h + l
+  
+  return val
 }
 
 // get page title by its raw index (normally we start with the sorted index)
@@ -226,32 +275,40 @@ function getTitleByRawIndex(dump, indexR, gotTitle) {
 
   if (indexR < 0 || indexR >= haystackLen) throw 'raw index ' + indexR + ' out of range';
 
-  // to: title offsets all-off.raw
-  // TODO support packed versions
-  fs.read(dump.files.to.fd, offset, 0, dump.sizeof_txt_told, indexR * dump.sizeof_txt_told, (err, bytesRead, data) => {
-    if (!err && bytesRead === dump.sizeof_txt_told) {
-      const lower = data.readUInt32LE(0);
-      const upper = data.readUInt32LE(4);
+  if (dump.files.tp.eleBitSize) {
+    offset = readPackedItem(dump.files.tp.fd, dump.files.tp.eleBitSize, indexR);
+  } else {
+    // to: title offsets all-off.raw
+    // TODO support packed versions
+    fs.read(dump.files.to.fd, offset, 0, dump.sizeof_txt_told, indexR * dump.sizeof_txt_told, (err, bytesRead, data) => {
+      if (!err && bytesRead === dump.sizeof_txt_told) {
+        const lower = data.readUInt32LE(0);
+        // TODO should only do this if sizeof_txt_told is 8
+        const upper = data.readUInt32LE(4);
 
-      offset = upper * Math.pow(2, 32) + lower;
+        offset = upper * Math.pow(2, 32) + lower;
 
-      if (upper > 2097151) console.warn(`** title offset ${offset} (${parseInt(+upper, 16)} : ${parseInt(+lower, 16)}) is greater than 53-bits!`);
-      if (offset < 0 || offset >= dump.files.t.byteLen) throw 'title offset ' + offset + ' out of range';
+        if (upper > 2097151) console.warn(`** title offset ${offset} (${parseInt(+upper, 16)} : ${parseInt(+lower, 16)}) is greater than 53-bits!`);
+        if (offset < 0 || offset >= dump.files.t.byteLen) throw 'title offset ' + offset + ' out of range';
+      }
+    });
+  }
 
-      // t: titles all.txt
-      fs.read(dump.files.t.fd, title, 0, 256, offset, (err, bytesRead, data) => {
-        if (!err && bytesRead > 0) {
-          title = data.toString('utf-8');
-          var spl = title.split(/\r?\n/);
-          if (spl.length < 2) throw 'didn\'t read a long enough string';
+  // TODO this is broken because packed uses sync calls but raw uses async with callbacks
+  if (typeof offset != "undefined") {
+    // t: titles all.txt
+    fs.read(dump.files.t.fd, title, 0, 256, offset, (err, bytesRead, data) => {
+      if (!err && bytesRead > 0) {
+        title = data.toString('utf-8');
+        var spl = title.split(/\r?\n/);
+        if (spl.length < 2) throw 'didn\'t read a long enough string';
 
-          gotTitle(spl[0]);
-        } else {
-          console.error(`failed to read title from offset ${offset}`);
-        }
-      });
-    }
-  });
+        gotTitle(spl[0]);
+      } else {
+        console.error(`failed to read title from offset ${offset}`);
+      }
+    });
+  }
 }
 
 // get the information of the given page other than the latest revision/text
@@ -356,50 +413,32 @@ function getArticle(dump, indexS, gotArticle) {
       throw 'sorted index ' + indexS + ' out of range';
     }
   } else {
-    // st: sorted titles all-idx.raw
-    // TODO support packed versions
-    fs.read(dump.files.st.fd, indexR, 0, 4, indexS * 4, (err, bytesRead, data) => {
-      if (!err && bytesRead === 4) {
-        indexR = data.readUInt32LE(0);
+    if (dump.files.sp.eleBitSize) {
+      console.log("** get article packed")
+      indexR = readPackedItem(dump.files.sp.fd, dump.files.sp.eleBitSize, indexS);
+      getArticleByRawIndex(dump, indexR, gotArticle);
+    } else {
+      // st: sorted titles all-idx.raw
+      // TODO support packed versions
+      fs.read(dump.files.st.fd, indexR, 0, 4, indexS * 4, (err, bytesRead, data) => {
+        if (!err && bytesRead === 4) {
+          indexR = data.readUInt32LE(0);
 
-        getArticleByRawIndex(dump, indexR, gotArticle);
-      } else { throw ['indexR', err, bytesRead]; }
-    });
+          getArticleByRawIndex(dump, indexR, gotArticle);
+        } else { throw ['indexR', err, bytesRead]; }
+      });
+    }
   }
 }
 
 // get the <text> of the most recent <revision> of the page
 //  by sorted index (this is the usual way. all page titles in Unicode order)
 function getArticleByRawIndex(dump, indexR, gotArticle) {
-  var haystackLen = dump.files.to.byteLen / dump.sizeof_txt_told;
-  var record = new Buffer(12);
-
-  if (indexR < 0 || indexR >= haystackLen) throw 'raw index ' + indexR + ' out of range (sorted index ' + indexS + ')';
-
-  // do: dump offsets off.raw
-  // TODO support packed versions
-  fs.read(dump.files.do.fd, record, 0, 12, indexR * 12, (err, bytesRead, data) => {
-    if (!err && bytesRead === 12) {
-      var lower, upper, offset, revisionOffset;
-
-      lower = data.readUInt32LE(0);
-      upper = data.readUInt32LE(4);
-      offset = upper * Math.pow(2, 32) + lower;
-
-      if (upper > 2097151) console.warn(`** dump offset ${offset} (${parseInt(+upper, 16)} : ${parseInt(+lower, 16)}) is greater than 53-bits!`);
-
-      revisionOffset = data.readUInt32LE(8);
-
-      // skip to latest <revision>
-      offset += revisionOffset;
-
-      if (offset < 0 || offset >= dump.files.d.byteLen) {
-        throw 'dump offset ' + offset + ' out of range';
-      }
-
+  readDumpOffset(dump, indexR, offset => {
+    if (typeof offset != "undefined") {
       var info = dump.type === "xml"
-        ? { off: offset, xml: { chunk: Buffer(1024) } }
-        : { off: offset, bz2: {} };
+      ? { off: offset, xml: { chunk: Buffer(1024) } }
+      : { off: offset, bz2: {} };
 
       var slab = '';
       (function readMore(info) {
@@ -429,6 +468,38 @@ function getArticleByRawIndex(dump, indexR, gotArticle) {
 
         });
       })(info);
+    }
+  });
+}
+
+function readDumpOffset(dump, indexR, thenCallback) {
+  var haystackLen = dump.files.do.byteLen / 12;
+  var record = new Buffer(12);
+  let offset;
+
+  if (indexR < 0 || indexR >= haystackLen) throw 'raw index ' + indexR + ' out of range (sorted index ' + indexS + ')';
+  // do: dump offsets off.raw
+  // TODO support packed versions
+  fs.read(dump.files.do.fd, record, 0, 12, indexR * 12, (err, bytesRead, data) => {
+    if (!err && bytesRead === 12) {
+      var lower, upper, revisionOffset;
+
+      lower = data.readUInt32LE(0);
+      upper = data.readUInt32LE(4);
+      offset = upper * Math.pow(2, 32) + lower;
+
+      if (upper > 2097151) console.warn(`** dump offset ${offset} (${parseInt(+upper, 16)} : ${parseInt(+lower, 16)}) is greater than 53-bits!`);
+
+      revisionOffset = data.readUInt32LE(8);
+
+      // skip to latest <revision>
+      offset += revisionOffset;
+
+      if (offset < 0 || offset >= dump.files.d.byteLen) {
+        throw 'dump offset ' + offset + ' out of range';
+      }
+
+      thenCallback(offset);
     }
   });
 }

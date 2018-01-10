@@ -318,9 +318,10 @@ async function read_pck_item(fd, numbits, index, revision_size_in_bits) {
   const rightshift = 64 - numbits - offset_mod
   const leftshift = 32 - rightshift
 
-  if (rightshift >= 32) throw "shifty"
-
-  if (rightshift != 0) {
+  if (rightshift >= 32) {
+    l = h >>> (rightshift - 64)
+    h = 0
+  } else if (rightshift != 0) {
     const t = (h << leftshift) >>> 0
     h >>>= rightshift
     l >>>= rightshift
