@@ -832,7 +832,7 @@ function parseTranslationsSection(section) {
     tables = section.body.match(/^{{trans-see\|.*?}}/mg);
 
     if (!tables) {
-      console.log("UNEXPECTED 827", section.body);
+      console.log("UNEXPECTED 835", section.body);
     }
   }
 
@@ -847,7 +847,7 @@ function parseTranslationTable(table) {
 
   let check, also, id, gloss, rawList, see;
 
-  let retval = { err: "unfilled retval" }
+  let retval = { err: "unfilled retval 850" }
 
   if (mch) {
     [ , check, also, id, gloss, rawList ] = mch;
@@ -864,7 +864,7 @@ function parseTranslationTable(table) {
         let langName, langItemsRaw, sublangsRaw;
 
         [, langName, langItemsRaw, sublangsRaw] = item.match(/^\*\s*(.*?)\s*:(?: *(.*))(?:\n([\s\S]*))?/m)
-
+ 
         // lang with direct trans only, no sublangs
         if (langItemsRaw && !sublangsRaw) {
           const tarr = parseTransDirectEntries(langName, langItemsRaw);
@@ -933,9 +933,9 @@ function parseTransDirectEntries(langName, langItemsRaw) {
   mch = langName.match(/^{{ttbc\|([a-z][a-z][a-z]?)}}$/);
 
   if (mch && mch[1])
-    return { code: mch[1], err: langItemsRaw, line: 928 }
+    return { code: mch[1], err: langItemsRaw, line: 936 }
 
-  return { name: langName, err: langItemsRaw, line: 930 };
+  return { name: langName, err: langItemsRaw, line: 938 };
 }
 
 function parseTransSublangs(langName, sublangsRaw) {
@@ -944,7 +944,7 @@ function parseTransSublangs(langName, sublangsRaw) {
 
     if (!mch) {
       // TODO this return is not yet handled by the caller
-      return { line: 939, subitem };
+      return { line: 951, subitem };
     }
 
     const [, lang2, subs] = mch;
@@ -1087,7 +1087,7 @@ function parseT2Template(t2) {
   else if (p[0] === "gloss")
     o.g = p[1];
   else
-    o["unexpected translation follower"] = p[0];
+    o["unexpected translation follower"] = { f: p[0], t2 };
 
   return o;
 }
