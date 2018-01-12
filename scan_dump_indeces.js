@@ -19,7 +19,7 @@ function bits_needed(n) {
   return b
 }
 
-async function getIndexFileMetadata(dir, basename) {
+async function getIndexFileMetadata(pathBase) {
   const indeces = [
     { p:'all-idx' }, // st
     { p:'all-off' }, // to
@@ -33,7 +33,7 @@ async function getIndexFileMetadata(dir, basename) {
 
   // for some reason you can't just do (await x).forEach() - you have to assign it to something
   // adds a field to each index object representing its file size in bytes
-  let _ = (await Promise.all(indeces.map(ind => stat(dir + basename + '-' + ind.p + '.raw'))))
+  let _ = (await Promise.all(indeces.map(ind => stat(pathBase + '-' + ind.p + '.raw'))))
           .forEach((v, i) => indeces[i].s = v.size)
 
   const all_off_int_size = verifyIndexFileMetadata(ob)
@@ -66,12 +66,12 @@ function verifyIndexFileMetadata(ob) {
   return all_off_int_size
 }
 
-async function scanIndexFile(whindex, dir, basename, getval, track) {
+async function scanIndexFile(whindex, pathBase, getval, track) {
   const elements_per_buf = 2048
   const buffer_size = whindex.element_size * elements_per_buf
   const b = new Buffer(buffer_size)
 
-  const fd = await open(dir + basename + '-' + whindex.p + '.raw', 'r')
+  const fd = await open(pathBase + '-' + whindex.p + '.raw', 'r')
 
   const freq = 1000000
 
@@ -79,12 +79,12 @@ async function scanIndexFile(whindex, dir, basename, getval, track) {
     const { bytesRead } = await read(fd, b, 0, buffer_size, null)
 
     if (bytesRead) {
-      for (let j = 0; j < bytesRead / whindex.element_size; ++j) {
-        const val = getval(b, j * whindex.element_size)
+      for (let i = 0; i < bytesRead / whindex.element_size; ++i) {
+        const val = getval(b, i * whindex.element_size)
         if (track) track(whindex, val)
 
-        const i = chunk_num * elements_per_buf + j
-        if (i % freq === 0) console.log(i, whindex.p, val)
+        const index = chunk_num * elements_per_buf + i
+        if (index % freq === 0) console.log(index, whindex.p, val)
       }
     }
 
@@ -93,14 +93,13 @@ async function scanIndexFile(whindex, dir, basename, getval, track) {
 }
 
 // all-idx // st // index
-function getValSt(b, o) {
+function get32BitVal(b, o) {
   const val = b.readUInt32LE(o + 0)
   return val
 }
 
 // all-off // to // title offset
-// TODO this should handle 32-bit all-off files, currently only handles 64-bit
-function getValTo(b, o) {
+function get64BitVal(b, o) {
   const lo = b.readUInt32LE(o + 0), hi = b.readUInt32LE(o + 4)
   return hi * Math.pow(2, 32) + lo
 }
@@ -131,7 +130,9 @@ async function main() {
   const wikipath = common.getWikipath()
   const baseName = common.parseArgs().basename
 
-  const metadata = await getIndexFileMetadata(wikipath, baseName)
+  const pathBase = wikipath + baseName
+  
+  const metadata = await getIndexFileMetadata(pathBase)
 
   const { ob } = metadata
 
@@ -143,10 +144,12 @@ async function main() {
   
   console.log(`element count: ${element_count}`)
 
+  const getValTo = ob.to.element_size == 8 ? get64BitVal : get32BitVal
+
   await Promise.all([
-    scanIndexFile(ob.st, wikipath, baseName, getValSt, trackStTo),
-    scanIndexFile(ob.to, wikipath, baseName, getValTo, trackStTo),
-    scanIndexFile(ob.do, wikipath, baseName, getValDo, trackDo),
+    scanIndexFile(ob.st, pathBase, get32BitVal, trackStTo),
+    scanIndexFile(ob.to, pathBase, getValTo, trackStTo),
+    scanIndexFile(ob.do, pathBase, getValDo, trackDo),
   ])
 
   console.log("st", "min", ob.st.min, "max", ob.st.max, "bits needed", bits_needed(ob.st.max))

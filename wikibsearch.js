@@ -4,14 +4,16 @@ const fs = require('fs'),
     util = require('util'),
   Bunzip = require('seek-bzip');
 
+const exists = util.promisify(fs.exists);
+
 const common = require('./common');
 
 function processCommandline(thenCallback) {
+  // TODO just checking for six or more args is no longer sufficient
   if (process.argv.length >= 6) {  // 0 is node.exe, 1 is wikibsearch.js
 
     const opts = {
       wikiPath: "",
-      indexPath: "",
     };
 
     for (let i = 2, a = 2; i < process.argv.length; ++i) {
@@ -21,24 +23,38 @@ function processCommandline(thenCallback) {
         if (arg.charAt(1) === '-') {
           let [ db, val ] = arg.substr(2).split("=");
 
-          if (db === 'page-info') {
-            opts.getPageInfo = true;
-          } else if (db === 'num-langs') {
-            opts.getNumLangs = true;
+          if (db === 'do') {
+            if (val) opts.dumpOffsetBits = val.split(":").map(n => +n);
+          } else if (db === 'full-raw') {
+            opts.fullRaw = true;
           } else if (db === 'lang-names') {
             opts.getLangNames = true;
           } else if (db === 'named-langs' || db === 'named-languages') {
             if (val) opts.getNamedLangs = val.split(",");
-          } else if (db === 'num-sections') {
-            opts.getNumSections = true;
-          } else if (db === 'section-names') {
-            opts.getSectionNames = true;
           } else if (db === 'named-sections') {
             if (val) opts.getNamedSections = val.split(",");
-          } else if (db === 'parse-translations') {
-            opts.parseTranslations = true;
           } else if (db === 'named-translations') {
             if (val) opts.getNamedTranslations = val.split(",");
+          } else if (db === 'num-langs') {
+            opts.getNumLangs = true;
+          } else if (db === 'num-sections') {
+            opts.getNumSections = true;
+          } else if (db === 'page-info') {
+            opts.getPageInfo = true;
+          } else if (db === 'parse-translations') {
+            opts.parseTranslations = true;
+          } else if (db === 'raw-index') {
+            opts.rawIndex = val;
+          } else if (db === 'raw-text' || db === 'raw-content') {
+            opts.fullRaw = true;
+          } else if (db === 'section-names') {
+            opts.getSectionNames = true;
+          } else if (db === 'sorted-index') {
+            opts.sortedIndex = val;
+          } else if (db === 'st') {
+            if (val) opts.titleIndexBits = val;
+          } else if (db === 'to') {
+            if (val) opts.titleOffsetBits = val;
           } else {
             console.log(`unknown double-hyphen switch: ${db}`);
           }
@@ -77,60 +93,45 @@ function processCommandline(thenCallback) {
   }
 }
 
-function getPaths(opts, thenCallback) {
-  // cross-platform for at least Windows and *nix (but possibly not Mac OS X)
+function getPaths(thenCallback) {
+  // cross-platform for at least Windows and *nix including Mac OS X
   // http://stackoverflow.com/questions/9080085/node-js-find-home-directory-in-platform-agnostic-way
-  var home = process.env[(process.platform == 'win32') ? 'USERPROFILE' : 'HOME'],
-      wikipathpath = home + '/.wikipath';
+  const home = process.env[(process.platform == 'win32') ? 'USERPROFILE' : 'HOME'],
+        wikipathpath = home + '/.wikipath';
 
   fs.exists(wikipathpath, x => {
     if (x) {
-      var str = fs.createReadStream(wikipathpath, {start: 0, end: 1023});
+      let str = fs.createReadStream(wikipathpath, {start: 0, end: 1023});
+      let wikiPath;
 
-      // TODO ~/.wikipath only has wikiPath - indexPath hardcoded for now!
+      // TODO separate paths for actual dump files and generated index files
       // TODO support multiple wikiPaths and indexPaths
-      // TODO  (I have Wiktionaries on C: and Wikipedia on external harddrive)
-      if (process.platform === 'sunos') {
-        opts.indexPath = '/mnt/user-store/hippietrail/';
-      } else {
-        opts.indexPath = opts.wikiPath;
-      }
+      // TODO huge wikipedia dump in a separate place to smaller wiktionary dumps
 
-      str.on('data', data => {
-        opts.wikiPath = data.toString('utf-8').replace(/^\s*(.*?)\s*$/, '$1');
-      });
+      str.on('data', data => wikiPath = data.toString('utf-8').replace(/^\s*(.*?)\s*$/, '$1'));
 
-      str.on('end', () => {
-        fs.exists(opts.wikiPath, x => {
-          let fullDumpPath;
-
-          if (x) {
-            opts.debug && console.log('path to wikis "' + opts.wikiPath + '" exists');
-
-            const dumpFileName = opts.wikiLang + opts.wikiProj + '-' + opts.wikiDate + '-pages-articles.xml';
-            fullDumpPath = opts.wikiPath + dumpFileName;
-
-            fs.exists(fullDumpPath, x => {
-              if (x) {
-                thenCallback({ fullDumpPath, type: "xml"});
-              } else {
-                fs.exists(fullDumpPath + '.bz2', x => {
-                  if (x) {
-                    thenCallback({ fullDumpPath, type: "bz2"});
-                  } else {
-                    console.error(`neither ${dumpFileName} nor ${dumpFileName}.bz2 exists`);
-                  }
-                });
-              }
-            });
-          } else {
-            console.error('path to wikis "' + opts.wikiPath + '" doesn\'t exist');
-          }
-        });
-      });
-
+      str.on('end', () => thenCallback(wikiPath));
     } else {
       console.error('no ".wikipath" in home');
+    }
+  });
+}
+
+function isDumpPresent(opts, thenCallback) {
+  const dumpFileName = opts.wikiLang + opts.wikiProj + '-' + opts.wikiDate + '-pages-articles.xml';
+  const fullDumpPath = opts.wikiPath + dumpFileName;
+
+  fs.exists(fullDumpPath, x => {
+    if (x) {
+      thenCallback({ fullDumpPath, type: "xml"});
+    } else {
+      fs.exists(fullDumpPath + '.bz2', x => {
+        if (x) {
+          thenCallback({ fullDumpPath, type: "bz2"});
+        } else {
+          console.error(`neither ${dumpFileName} nor ${dumpFileName}.bz2 exists`);
+        }
+      });
     }
   });
 }
@@ -138,8 +139,9 @@ function getPaths(opts, thenCallback) {
 function sanityCheck(opts, dump, searchTerm, thenCallback) {
   let sane = false;
 
+  // to use the bzipped dump file we also need the seek-bzip table file (.zt)
   const gotBzAndZt = ["bz", "zt"].every(f => ["fd", "byteLen"].every(v => v in dump.files[f]));
-  
+
   if (dump.type === "xml"|| (dump.type === "bz2" && gotBzAndZt)) {
     // is dump offset/revision file a multiple of 12 bytes long?
     if (dump.files.do.byteLen % 12 == 0) {
@@ -162,6 +164,28 @@ function sanityCheck(opts, dump, searchTerm, thenCallback) {
     }
   }
 
+  /*
+    if ("dp" in dump.files && "dumpOffsetBits" in opts)
+      console.log("can use packed dump offset file", dump.files.dp.byteLen * 8 / opts.dumpOffsetBits.reduce((a, n) => +a + +n))
+    if ("tp" in dump.files && "titleOffsetBits" in opts)
+      console.log("can use packed title offset file", dump.files.tp.byteLen * 8 / opts.titleOffsetBits)
+    if ("sp" in dump.files && "titleIndexBits" in opts)
+      console.log("can use packed title index file", dump.files.sp.byteLen * 8 / opts.titleIndexBits)
+  */
+
+  console.log("Number of entries in dump indicated by packed dump files:",
+    [["dp", "dumpOffsetBits"], ["tp", "titleOffsetBits"], ["sp", "titleIndexBits"]].map(
+      p => p[0] in dump.files && p[1] in opts
+      ? [
+          dump.files[p[0]].byteLen,
+          Array.isArray(opts[p[1]])
+            ? opts[p[1]].reduce((a,n) => a+n)
+            : opts[p[1]]
+        ]
+      : false
+    ).map(p => p[0] * 8 / p[1]).reduce((a,n) => Math.floor(a) == Math.floor(n) ? Math.floor(a) : NaN)
+  );
+
   if (sane) {
     thenCallback(opts, dump, searchTerm);
   } else {
@@ -169,6 +193,7 @@ function sanityCheck(opts, dump, searchTerm, thenCallback) {
   }
 }
 
+// get page title by its sorted index (this is the usual way. all page titles in Unicode order)
 function getTitle(dump, indexS, gotTitle) {
   var haystackLen = dump.files.to.byteLen / dump.sizeof_txt_told;
   var indexR = new Buffer(4), offset = new Buffer(dump.sizeof_txt_told), title = new Buffer(256);
@@ -183,43 +208,54 @@ function getTitle(dump, indexS, gotTitle) {
     }
   } else {
     // st: sorted titles all-idx.raw
+    // TODO support packed versions
     fs.read(dump.files.st.fd, indexR, 0, 4, indexS * 4, (err, bytesRead, data) => {
       if (!err && bytesRead === 4) {
         indexR = data.readUInt32LE(0);
 
-        if (indexR < 0 || indexR >= haystackLen) throw 'raw index ' + indexR + ' out of range (sorted index ' + indexS + ')';
-
-        // to: title offsets all-off.raw
-        fs.read(dump.files.to.fd, offset, 0, dump.sizeof_txt_told, indexR * dump.sizeof_txt_told, (err, bytesRead, data) => {
-          if (!err && bytesRead === dump.sizeof_txt_told) {
-            const lower = data.readUInt32LE(0);
-            const upper = data.readUInt32LE(4);
-
-            offset = upper * Math.pow(2, 32) + lower;
-
-            if (upper > 2097151) console.warn(`** title offset ${offset} (${parseInt(+upper, 16)} : ${parseInt(+lower, 16)}) is greater than 53-bits!`);
-            if (offset < 0 || offset >= dump.files.t.byteLen) throw 'title offset ' + offset + ' out of range';
-
-            // t: titles all.txt
-            fs.read(dump.files.t.fd, title, 0, 256, offset, (err, bytesRead, data) => {
-              if (!err && bytesRead > 0) {
-                title = data.toString('utf-8');
-                var spl = title.split(/\r?\n/);
-                if (spl.length < 2) throw 'didn\'t read a long enough string';
-
-                gotTitle(spl[0]);
-              } else {
-                console.error(`failed to read title from offset ${offset}`);
-              }
-            });
-          }
-        });
+        getTitleByRawIndex(dump, indexR, gotTitle);
       } else { throw ['indexR', err, bytesRead]; }
     });
   }
 }
 
+// get page title by its raw index (normally we start with the sorted index)
+function getTitleByRawIndex(dump, indexR, gotTitle) {
+  var haystackLen = dump.files.to.byteLen / dump.sizeof_txt_told;
+  var offset = new Buffer(dump.sizeof_txt_told), title = new Buffer(256);
+
+  if (indexR < 0 || indexR >= haystackLen) throw 'raw index ' + indexR + ' out of range';
+
+  // to: title offsets all-off.raw
+  // TODO support packed versions
+  fs.read(dump.files.to.fd, offset, 0, dump.sizeof_txt_told, indexR * dump.sizeof_txt_told, (err, bytesRead, data) => {
+    if (!err && bytesRead === dump.sizeof_txt_told) {
+      const lower = data.readUInt32LE(0);
+      const upper = data.readUInt32LE(4);
+
+      offset = upper * Math.pow(2, 32) + lower;
+
+      if (upper > 2097151) console.warn(`** title offset ${offset} (${parseInt(+upper, 16)} : ${parseInt(+lower, 16)}) is greater than 53-bits!`);
+      if (offset < 0 || offset >= dump.files.t.byteLen) throw 'title offset ' + offset + ' out of range';
+
+      // t: titles all.txt
+      fs.read(dump.files.t.fd, title, 0, 256, offset, (err, bytesRead, data) => {
+        if (!err && bytesRead > 0) {
+          title = data.toString('utf-8');
+          var spl = title.split(/\r?\n/);
+          if (spl.length < 2) throw 'didn\'t read a long enough string';
+
+          gotTitle(spl[0]);
+        } else {
+          console.error(`failed to read title from offset ${offset}`);
+        }
+      });
+    }
+  });
+}
+
 // get the information of the given page other than the latest revision/text
+//  by sorted index (this is the usual way. all page titles in Unicode order)
 function getPageInfo(dump, indexS, gotPageInfo) {
   var haystackLen = dump.files.to.byteLen / dump.sizeof_txt_told;
   var indexR = new Buffer(4), record = new Buffer(12);
@@ -234,67 +270,79 @@ function getPageInfo(dump, indexS, gotPageInfo) {
     }
   } else {
     // st: sorted titles all-idx.raw
+    // TODO support packed versions
     fs.read(dump.files.st.fd, indexR, 0, 4, indexS * 4, (err, bytesRead, data) => {
       if (!err && bytesRead === 4) {
         indexR = data.readUInt32LE(0);
 
-        if (indexR < 0 || indexR >= haystackLen) throw 'raw index ' + indexR + ' out of range (sorted index ' + indexS + ')';
-
-        // do: dump offsets off.raw
-        fs.read(dump.files.do.fd, record, 0, 12, indexR * 12, (err, bytesRead, data) => {
-          if (!err && bytesRead === 12) {
-            var lower, upper, offset, revisionOffset;
-
-            lower = data.readUInt32LE(0);
-            upper = data.readUInt32LE(4);
-            offset = upper * Math.pow(2, 32) + lower;
-
-            if (upper > 2097151) console.warn(`** dump offset ${offset} (${parseInt(+upper, 16)} : ${parseInt(+lower, 16)}) is greater than 53-bits!`);
-
-            if (offset < 0 || offset >= dump.files.d.byteLen) {
-              throw 'dump offset ' + offset + ' out of range';
-            }
-
-            var info = dump.type === "xml"
-              ? { off: offset, xml: { chunk: Buffer(1024) } }
-              : { off: offset, bz2: {} };
-
-            var slab = '';
-            (function readMore(info) {
-              readSome(dump, info, data => {
-
-                slab += data.toString('utf-8');
-
-                var end = slab.indexOf('</page>');
-
-                if (end === -1) {
-                  readMore(info);
-                } else {
-                  // TODO could there be a corner case where a chunk ends right between the > and \n
-                  end = slab.indexOf('\n', end);
-                  if (end !== -1) {
-                    var pageInfo = slab.substring(0, end + 1);
-                    var mch = pageInfo.match(/(  <page[^>]*>[\s\S]*)<text[^>]*>[\s\S]*<\/text>\s*([\s\S]*<\/page>)/m);
-                    if (mch) {
-                      gotPageInfo(mch[1] + mch[2]);
-                    } else {
-                      throw 'got page but didn\'t extract info';
-                    }
-                  } else {
-                    throw 'didn\'t get \\n';
-                  }
-                }
-
-              });
-            })(info);
-          }
-        });
+        getPageInfoByRawIndex(dump, indexR, gotPageInfo);
       } else { throw ['indexR', err, bytesRead]; }
     });
   }
 }
 
+// get the information of the given page other than the latest revision/text
+//  by raw index (normally we start with the sorted index)
+function getPageInfoByRawIndex(dump, indexR, gotPageInfo) {
+  var haystackLen = dump.files.to.byteLen / dump.sizeof_txt_told;
+  var record = new Buffer(12);
+
+  if (indexR < 0 || indexR >= haystackLen) throw 'raw index ' + indexR + ' out of range';
+
+  // do: dump offsets off.raw
+  // TODO support packed versions
+  fs.read(dump.files.do.fd, record, 0, 12, indexR * 12, (err, bytesRead, data) => {
+    if (!err && bytesRead === 12) {
+      var lower, upper, offset, revisionOffset;
+
+      lower = data.readUInt32LE(0);
+      upper = data.readUInt32LE(4);
+      offset = upper * Math.pow(2, 32) + lower;
+
+      if (upper > 2097151) console.warn(`** dump offset ${offset} (${parseInt(+upper, 16)} : ${parseInt(+lower, 16)}) is greater than 53-bits!`);
+
+      if (offset < 0 || offset >= dump.files.d.byteLen) {
+        throw 'dump offset ' + offset + ' out of range';
+      }
+
+      var info = dump.type === "xml"
+        ? { off: offset, xml: { chunk: Buffer(1024) } }
+        : { off: offset, bz2: {} };
+
+      var slab = '';
+      (function readMore(info) {
+        readSome(dump, info, data => {
+
+          slab += data.toString('utf-8');
+
+          var end = slab.indexOf('</page>');
+
+          if (end === -1) {
+            readMore(info);
+          } else {
+            // TODO could there be a corner case where a chunk ends right between the > and \n
+            end = slab.indexOf('\n', end);
+            if (end !== -1) {
+              var pageInfo = slab.substring(0, end + 1);
+              var mch = pageInfo.match(/(  <page[^>]*>[\s\S]*)<text[^>]*>[\s\S]*<\/text>\s*([\s\S]*<\/page>)/m);
+              if (mch) {
+                gotPageInfo(mch[1] + mch[2]);
+              } else {
+                throw 'got page but didn\'t extract info';
+              }
+            } else {
+              throw 'didn\'t get \\n';
+            }
+          }
+
+        });
+      })(info);
+    }
+  });
+}
+
 // get the <text> of the most recent <revision> of the page
+//  by sorted index (this is the usual way. all page titles in Unicode order)
 function getArticle(dump, indexS, gotArticle) {
   var haystackLen = dump.files.to.byteLen / dump.sizeof_txt_told;
   var indexR = new Buffer(4), record = new Buffer(12);
@@ -309,69 +357,80 @@ function getArticle(dump, indexS, gotArticle) {
     }
   } else {
     // st: sorted titles all-idx.raw
+    // TODO support packed versions
     fs.read(dump.files.st.fd, indexR, 0, 4, indexS * 4, (err, bytesRead, data) => {
       if (!err && bytesRead === 4) {
         indexR = data.readUInt32LE(0);
 
-        if (indexR < 0 || indexR >= haystackLen) throw 'raw index ' + indexR + ' out of range (sorted index ' + indexS + ')';
-
-        // do: dump offsets off.raw
-        fs.read(dump.files.do.fd, record, 0, 12, indexR * 12, (err, bytesRead, data) => {
-          if (!err && bytesRead === 12) {
-            var lower, upper, offset, revisionOffset;
-
-            lower = data.readUInt32LE(0);
-            upper = data.readUInt32LE(4);
-            offset = upper * Math.pow(2, 32) + lower;
-
-            if (upper > 2097151) console.warn(`** dump offset ${offset} (${parseInt(+upper, 16)} : ${parseInt(+lower, 16)}) is greater than 53-bits!`);
-
-            revisionOffset = data.readUInt32LE(8);
-
-            // skip to latest <revision>
-            offset += revisionOffset;
-
-            if (offset < 0 || offset >= dump.files.d.byteLen) {
-              throw 'dump offset ' + offset + ' out of range';
-            }
-
-            var info = dump.type === "xml"
-              ? { off: offset, xml: { chunk: Buffer(1024) } }
-              : { off: offset, bz2: {} };
-
-            var slab = '';
-            (function readMore(info) {
-              readSome(dump, info, data => {
-
-                slab += data.toString('utf-8');
-
-                var end = slab.indexOf('</revision>');
-
-                if (end === -1) {
-                  readMore(info);
-                } else {
-                  // TODO could there be a corner case where a chunk ends right between the > and \n
-                  end = slab.indexOf('\n', end);
-                  if (end !== -1) {
-                    var revision = slab.substring(0, end + 1);
-                    var [, mch] = revision.match(/<text[^>]*>([\s\S]*)<\/text>/m);
-                    if (mch) {
-                      gotArticle(mch);
-                    } else {
-                      throw 'got revision but didn\'t extract text';
-                    }
-                  } else {
-                    throw 'didn\'t get \\n';
-                  }
-                }
-
-              });
-            })(info);
-          }
-        });
+        getArticleByRawIndex(dump, indexR, gotArticle);
       } else { throw ['indexR', err, bytesRead]; }
     });
   }
+}
+
+// get the <text> of the most recent <revision> of the page
+//  by sorted index (this is the usual way. all page titles in Unicode order)
+function getArticleByRawIndex(dump, indexR, gotArticle) {
+  var haystackLen = dump.files.to.byteLen / dump.sizeof_txt_told;
+  var record = new Buffer(12);
+
+  if (indexR < 0 || indexR >= haystackLen) throw 'raw index ' + indexR + ' out of range (sorted index ' + indexS + ')';
+
+  // do: dump offsets off.raw
+  // TODO support packed versions
+  fs.read(dump.files.do.fd, record, 0, 12, indexR * 12, (err, bytesRead, data) => {
+    if (!err && bytesRead === 12) {
+      var lower, upper, offset, revisionOffset;
+
+      lower = data.readUInt32LE(0);
+      upper = data.readUInt32LE(4);
+      offset = upper * Math.pow(2, 32) + lower;
+
+      if (upper > 2097151) console.warn(`** dump offset ${offset} (${parseInt(+upper, 16)} : ${parseInt(+lower, 16)}) is greater than 53-bits!`);
+
+      revisionOffset = data.readUInt32LE(8);
+
+      // skip to latest <revision>
+      offset += revisionOffset;
+
+      if (offset < 0 || offset >= dump.files.d.byteLen) {
+        throw 'dump offset ' + offset + ' out of range';
+      }
+
+      var info = dump.type === "xml"
+        ? { off: offset, xml: { chunk: Buffer(1024) } }
+        : { off: offset, bz2: {} };
+
+      var slab = '';
+      (function readMore(info) {
+        readSome(dump, info, data => {
+
+          slab += data.toString('utf-8');
+
+          var end = slab.indexOf('</revision>');
+
+          if (end === -1) {
+            readMore(info);
+          } else {
+            // TODO could there be a corner case where a chunk ends right between the > and \n
+            end = slab.indexOf('\n', end);
+            if (end !== -1) {
+              var revision = slab.substring(0, end + 1);
+              var [, mch] = revision.match(/<text[^>]*>([\s\S]*)<\/text>/m);
+              if (mch) {
+                gotArticle(mch);
+              } else {
+                throw 'got revision but didn\'t extract text';
+              }
+            } else {
+              throw 'didn\'t get \\n';
+            }
+          }
+
+        });
+      })(info);
+    }
+  });
 }
 
 function readSome(dump, info, callback) {
@@ -507,9 +566,11 @@ function bsearch(dump, searchTerm, callback) {
         } else if (Aimid < key) {
           // key is in upper subset
           bs(A, key, imid+1, imax, cb);
-        } else {
+        } else if (Aimid == key) {
           // key has been found
           cb({ok:true, a:imid, b:imid});
+        } else {
+          throw "up"; // TODO
         }
       });
     }
@@ -519,8 +580,9 @@ function bsearch(dump, searchTerm, callback) {
 }
 
 // main
-processCommandline(opts => {
-  getPaths(opts, (dump) => {
+processCommandline(opts => getPaths(wikiPath => fs.exists(wikiPath, x => {
+  opts.wikiPath = wikiPath;
+  isDumpPresent(opts, dump => {
     opts.debug && console.log(`dump "${dump.fullDumpPath}" exists (${dump.type})`);
 
     // open dump file and index files
@@ -548,9 +610,8 @@ processCommandline(opts => {
         // TODO these are never closed!
         fs.open(p, 'r', (err, fd) => {
           if (err) {
-            //console.error('error opening ' + e.desc + ' file): ' + err);
             opts.debug && console.log('... ' + e.desc + ' file NOPE');
-            
+
             if (--left === 0) {
               sanityCheck(opts, dump, opts.searchTerm, processFiles);
             }
@@ -573,51 +634,127 @@ processCommandline(opts => {
         });
       })(dump.files[k]);
     }
-  });
-});
+  })
+})));
 
 function processFiles(opts, dump, searchTerm) {
-  bsearch(dump, searchTerm, result => {
-    var before, after,
-      gotNearby = () => {
-        console.log('"' + searchTerm + '" belongs between "' + before + '" and "' + after + '"');
-      };
+  if ("rawIndex" in opts) {
+    gotRawIndex(dump, opts.rawIndex);
+  } else if ("sortedIndex" in opts) {
+    gotSortedIndex(dump, opts.sortedIndex);
+  } else {
+    bsearch(dump, searchTerm, result => {
+      var before, after,
+        gotNearby = () => {
+          console.log('"' + searchTerm + '" belongs between "' + before + '" and "' + after + '"');
+        };
 
-    if (result.a === result.b) {
-      getTitle(dump, result.a, t => {
-        if (opts.debug)
-          console.log('"' + searchTerm + '" found at ' + result.a);
-        else
-        console.log('"' + searchTerm + '"');
+      if (result.a === result.b) {
+        gotSortedIndex(dump, result.a);
+      } else {
+        getTitle(dump, result.a, t => {
+          before = t;
+          if (after) gotNearby();
+        });
+        getTitle(dump, result.b, t => {
+          after = t;
+          if (before) gotNearby();
+        });
+      }
+    });
+  }
 
-        if ("getPageInfo" in opts) {
-          var pageInfo = getPageInfo(dump, result.a, pageInfo => {
-            gotPageInfo(opts, pageInfo);
-          });
-        } else {
-          var article = getArticle(dump, result.a, article => {
-            gotArticle(opts, article);
-          });
-        }
-      });
-    } else {
-      getTitle(dump, result.a, t => {
-        before = t;
-        if (after) gotNearby();
-      });
-      getTitle(dump, result.b, t => {
-        after = t;
-        if (before) gotNearby();
-      });
-    }
-  });
+  function gotRawIndex(dump, rawIndex) {
+    getTitleByRawIndex(dump, rawIndex, t => {
+      console.log('"' + t + '" is at raw index ' + rawIndex);
+
+      if ("getPageInfo" in opts) {
+        var pageInfo = getPageInfoByRawIndex(dump, rawIndex, pageInfo => {
+          gotPageInfo(opts, pageInfo);
+        });
+      } else {
+        var article = getArticleByRawIndex(dump, rawIndex, article => {
+          gotArticle(opts, article, searchTerm);
+        });
+      }
+    })
+  }
+
+  function gotSortedIndex(dump, sortedIndex) {
+    getTitle(dump, sortedIndex, t => {
+      if (opts.debug || "sortedIndex" in opts)
+        console.log('"' + t + '" is at sorted index ' + sortedIndex);
+      else
+        console.log('"' + t + '"');
+
+      if ("getPageInfo" in opts) {
+        var pageInfo = getPageInfo(dump, sortedIndex, pageInfo => {
+          gotPageInfo(opts, pageInfo);
+        });
+      } else {
+        var article = getArticle(dump, sortedIndex, article => {
+          gotArticle(opts, article, searchTerm);
+        });
+      }
+    });
+  }
 }
 
 function gotPageInfo(opts, pageInfo) {
-  console.log(pageInfo);
+  const lines = pageInfo.split("\n");
+
+  const info = {};
+  let stack = [];
+  let where = info;
+
+  for (let i = 0; i < lines.length; ++i) {
+    const l = lines[i];
+    const m = l.match(/^( *)<(\/)?([^>]*?)( \/)?>(?:([^<]*)<\/([^>]*)>)?$/);
+
+    if (m) {
+      const [, ind, sl1, ot, sl2, cont, ct ] = m;
+
+      // remove named keys and elements with undefined values
+      const ob = JSON.parse(JSON.stringify({ ind:ind.length/2-1, sl1, ot, sl2, cont, ct }));
+      const nk = Object.keys(ob).length;
+      let type = "unknown";
+
+      if ("ot" in ob && nk == 2) type = "open tag";
+      else if ("ot" in ob && "cont" in ob && "ct" in ob && nk == 4) type = "full element";
+      else if ("sl1" in ob && "ot" in ob && nk == 3) type = "close tag";
+      else if ("ot" in ob && "sl2" in ob && nk == 3) type = "empty tag";
+      else throw "parse error type 1 in pageinfo";
+
+      switch (type) {
+        case "open tag":
+          where[ot] = {};
+          where = where[ot];
+          stack.push(where);
+          break;
+        case "full element":
+          where[ot] = Number.isNaN(Number(cont)) ? cont : +cont;
+          if (ot == "timestamp") {
+            where["_" + ot] = timeDiffFrom(Date.parse(where[ot]))
+          }
+          break;
+        case "close tag":
+          stack.pop();
+          where = stack[ stack.length - 1 ]
+          break;
+        case "empty tag":
+          where[ot] = true;
+          break;
+        default:
+          throw "parse error type 2 in pageinfo";
+      }
+    } else {
+      throw "parse error type 3 in pageinfo";
+    }
+  }
+  console.log(JSON.stringify(info, null, "  "));
 }
 
-function gotArticle(opts, rawArticle) {
+function gotArticle(opts, rawArticle, pageTitle) {
   const article = decodeEntities(rawArticle);
   let prologAndLangSections;
 
@@ -635,10 +772,10 @@ function gotArticle(opts, rawArticle) {
       const [ , langName ] = s.match(/^==\s*([^=]*)\s*==$/m);
       return langName;
     })
-    
+
     if (prologAndLangSections.prolog) langNames.unshift("prolog");
 
-    console.log(`language sections: ${langNames}`)
+    console.log(`language sections: ${langNames}`);
   }
 
   if ("getNamedLangs" in opts) {
@@ -665,15 +802,15 @@ function gotArticle(opts, rawArticle) {
       }
     }
   }
-        
+
   if ("getNumSections" in opts) {
     if (!prologAndLangSections) prologAndLangSections = splitArticleIntoPrologAndLangSections(article);
-    
+
     const sections = prologAndLangSections.langSections;
-    
+
     for (let i = 0; i < sections.length; i++) {
       const langsec = sections[i];
-      
+
       const [ , langName ] = langsec.match(/^==\s*([^=]*)\s*==$/m);
 
       const mch = langsec.match(/^(===+)[^=]*\1/gm);
@@ -684,22 +821,30 @@ function gotArticle(opts, rawArticle) {
 
   if ("getSectionNames" in opts) {
     if (!prologAndLangSections) prologAndLangSections = splitArticleIntoPrologAndLangSections(article);
-    
+
     const sections = prologAndLangSections.langSections;
-    
+
     for (let i = 0; i < sections.length; i++) {
       const langsec = sections[i];
-      
+
       const [ , langName ] = langsec.match(/^==\s*([^=]*)\s*==$/m);
 
       const mch = langsec.match(/^(===+)[^=]*\1/gm);
 
-      const sectionNames = mch.map( foo => {
-        const [ , eq, name ] = foo.match(/^(===+)\s*([^=]*)\s*\1/m);
-        return [ eq.length, name ];
-      });
+      let sectionNames;
 
-      console.log(`"${opts.searchTerm}" / ${langName} / sections: ${sectionNames}`);
+      if (mch) {
+        sectionNames = mch.map( foo => {
+          const [ , eq, name ] = foo.match(/^(===+)\s*([^=]*)\s*\1/m);
+          return [ eq.length, name ];
+        });
+
+        console.log(`"${opts.searchTerm || opts.sortedIndex || opts.rawIndex}" / ${langName} / sections: ${sectionNames}`);
+      } else {
+        console.log("** 912", langsec)
+      }
+
+      getSectionStructure(langName, sectionNames);
     }
   }
 
@@ -728,7 +873,7 @@ function gotArticle(opts, rawArticle) {
             else
               filteredTranslations = parsedTranslations;
 
-            console.log(JSON.stringify(filteredTranslations, null, "  "))
+            console.log(JSON.stringify(filteredTranslations, null, "  "));
           } else {
             if (j === 0) console.log("!!!!!!!!!!!!!");
             console.log(`/-------${j}-------\\`);
@@ -824,6 +969,52 @@ function splitLangSectionIntoSections(langSection) {
   return retval;
 }
 
+function getSectionStructure(langName, sections) {
+  const result = {}, body = {};
+
+  result[langName] = body;
+
+  let prev_depth = 2;
+  let prev_ele = body;
+  let curr_parent = body;
+
+  for (let i = 0; i < sections.length; ++i) {
+    const [depth, name] = sections[i];
+
+    const ele = {};
+    sections[i][2] = ele;
+
+    let where = null;
+
+    if (depth == prev_depth)
+      where = curr_parent;
+    else if (depth > prev_depth)
+      where = prev_ele;
+    else {
+      for (let j = i - 1; j >= 0; --j) {
+        if (sections[j][0] < depth) {
+          where = sections[j][2];
+          break;
+        }
+      }
+
+      if (!where) where = body;
+    }
+
+    let nameadj = name;
+    while (nameadj in where)
+      nameadj += "'";
+
+    where[nameadj] = ele;
+    curr_parent = where;
+
+    prev_depth = depth;
+    prev_ele = ele;
+  }
+
+  console.log(JSON.stringify(result, null, "  "));
+}
+
 // parse an entire ====Translations==== section
 function parseTranslationsSection(section) {
   let tables = section.body.match(/^{{(?:check)?trans-top(?:-also)?(?:\|.*?)?}}[\s\S]*?^{{trans-bottom}}/mg);
@@ -832,7 +1023,7 @@ function parseTranslationsSection(section) {
     tables = section.body.match(/^{{trans-see\|.*?}}/mg);
 
     if (!tables) {
-      console.log("UNEXPECTED 835", section.body);
+      console.log("UNEXPECTED 1026", section.body);
     }
   }
 
@@ -912,7 +1103,7 @@ function parseTranslationTable(table) {
 
         return acc;
       }, {});
-  
+
       return { check, also, id, gloss, langs: obj2 };
     }
   }
@@ -923,19 +1114,19 @@ function parseTransDirectEntries(langName, langItemsRaw) {
   let arr = langItemsRaw.match(/{{t.*?}}(?: {{[^t].*?}})?/g);
 
   if (arr) return arr.map(tr => matchTTemplate(tr));
-  
+
   let mch;
 
-  arr = langItemsRaw.match(/\[\[.*?\]\] {{g\|.}} {{qualifier\|.*?}}/g);
+  arr = langItemsRaw.match(/\[\[.*?\]\](?: {{g\|.}})? {{qualifier\|.*?}}/g);
 
   if (arr) return arr.map(tr => matchTNonTemplate(tr));
 
   mch = langName.match(/^{{ttbc\|([a-z][a-z][a-z]?)}}$/);
 
   if (mch && mch[1])
-    return { code: mch[1], err: langItemsRaw, line: 936 }
+    return { code: mch[1], err: langItemsRaw, line: 1127 }
 
-  return { name: langName, err: langItemsRaw, line: 938 };
+  return { name: langName, err: langItemsRaw, line: 1129 };
 }
 
 function parseTransSublangs(langName, sublangsRaw) {
@@ -977,7 +1168,7 @@ function parseTransSublangs(langName, sublangsRaw) {
 
   const obj = subs.reduce((acc, cur) => {
     // TODO why does this never happen?
-    if (("tarr" in cur) && ("subs" in cur)) console.log("** 976 cur has both tarr and subs")
+    if (("tarr" in cur) && ("subs" in cur)) console.log("** 1030 cur has both tarr and subs");
     acc[cur.subname] = cur.tarr || cur.subs;
     return acc;
   }, {});
@@ -1001,7 +1192,7 @@ function parseTTemplate(tt) {
   const p = parseTemplate(tt);
   const o = {};
   let langCode;
-  
+
   Object.entries(p).forEach(e => {
     const [k, v] = e;
 
@@ -1112,11 +1303,11 @@ function parseTemplate(temp) {
   return r.ob;
 }
 
-// before translations were done with {{templates}} they were done with [[wikilinks]] 
+// before translations were done with {{templates}} they were done with [[wikilinks]]
 function matchTNonTemplate(nonTemp) {
-  const [, w, g, q] = nonTemp.match(/\[\[(.*?)\]\] {{g\|(.)}} {{qualifier\|(.*)?}}/);
+  const [, w, a, g, q] = nonTemp.match(/\[\[([^#]*?)(?:#.*?\|(.*?))?\]\](?: {{g\|(.)}})? {{qualifier\|(.*)?}}/);
 
-  return { w, g: [g], q }
+  return { w, alt: a & a !== w ? a : undefined, g: g ? [g] : undefined, q }
 }
 
 function filterTranslations(parsedTranslations, namedTranslations) {
@@ -1136,13 +1327,11 @@ function filterTranslations(parsedTranslations, namedTranslations) {
     if (langAr.length) {
       langAr.forEach(langName => {
         const transLangEntryOb = transTable.langs[langName];
-        //let filteredSublangs;
 
-        //filteredSublangs = transLangEntryOb;
         if ("sublangs" in transLangEntryOb)
-          /*filteredSublangs*/transLangEntryOb.sublangs = filterSublangs(transLangEntryOb.sublangs, namedTranslations);
-        
-        langOb[langName] = transLangEntryOb//filteredSublangs;
+          transLangEntryOb.sublangs = filterSublangs(transLangEntryOb.sublangs, namedTranslations);
+
+        langOb[langName] = transLangEntryOb;
       });
       acc.push({ ...transTable, langs: langOb });
     }
@@ -1172,6 +1361,32 @@ function filterSublangs(transSublangEntryOb, namedTranslations) {
     });
     filteredResult = sublangOb;
   }
-  
+
   return filteredResult;
+}
+
+function timeDiffFrom(backThen) {
+  let howOld = "";
+
+  if (backThen) {
+    const ms = new Date() - backThen;
+    const s = ms / 1000;
+    const min = s / 60;
+    const h = min / 60;
+    const d = h / 24;
+    const w = d / 7;
+    const mon = w / 30.5;
+    const y = mon / 12;
+
+    if (y >= 1) howOld = "about " + (y * 2).toFixed(0) / 2 + " years ago";
+    else if (mon >= 1) howOld = "about " + (mon * 2).toFixed(0) / 2 + " months ago";
+    else if (w >= 1) howOld = "about " + (w * 2).toFixed(0) / 2 + " weeks ago";
+    else if (d >= 1) howOld = "about " + (d * 2).toFixed(0) / 2 + " days ago";
+    else if (h >= 1) howOld = "about " + (h * 2).toFixed(0) / 2 + " hours ago";
+    else if (min >= 1) howOld = "about " + (min * 2).toFixed(0) / 2 + " minutes ago";
+    else if (s >= 30) howOld = "about " + (s * 2).toFixed(0) / 2 + " seconds ago";
+    else howOld = "moments ago";
+  }
+
+  return howOld;
 }
