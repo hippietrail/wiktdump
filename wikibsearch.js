@@ -231,7 +231,6 @@ function getTitle(dump, indexS, gotTitle) {
       fs.read(dump.files.st.fd, indexR, 0, 4, indexS * 4, (err, bytesRead, data) => {
         if (!err && bytesRead === 4) {
           indexR = data.readUInt32LE(0);
-          console.log("###", indexR);
           getTitleByRawIndex(dump, indexR, gotTitle);
         } else { throw ['indexR', err, bytesRead]; }
       });
@@ -277,12 +276,14 @@ function readPackedItem(fd, numbits, index) {
 // get page title by its raw index (normally we start with the sorted index)
 function getTitleByRawIndex(dump, indexR, gotTitle) {
   var haystackLen = dump.files.to.byteLen / dump.sizeof_txt_told;
-  var offset = new Buffer(dump.sizeof_txt_told), title = new Buffer(256);
+  var offset = new Buffer(dump.sizeof_txt_told);
 
   if (indexR < 0 || indexR >= haystackLen) throw 'raw index ' + indexR + ' out of range';
 
   if (dump.files.tp.eleBitSize) {
     offset = readPackedItem(dump.files.tp.fd, dump.files.tp.eleBitSize, indexR);
+
+    getTitleByRawOffset(dump, offset, gotTitle);
   } else {
     // to: title offsets all-off.raw
     // TODO support packed versions
@@ -295,25 +296,28 @@ function getTitleByRawIndex(dump, indexR, gotTitle) {
 
         if (upper > 2097151) console.warn(`** title offset ${offset} (${parseInt(+upper, 16)} : ${parseInt(+lower, 16)}) is greater than 53-bits!`);
         if (offset < 0 || offset >= dump.files.t.byteLen) throw 'title offset ' + offset + ' out of range';
+
+        getTitleByRawOffset(dump, offset, gotTitle);
       }
     });
   }
+}
 
-  // TODO this is broken because packed uses sync calls but raw uses async with callbacks
-  if (typeof offset != "undefined") {
-    // t: titles all.txt
-    fs.read(dump.files.t.fd, title, 0, 256, offset, (err, bytesRead, data) => {
-      if (!err && bytesRead > 0) {
-        title = data.toString('utf-8');
-        var spl = title.split(/\r?\n/);
-        if (spl.length < 2) throw 'didn\'t read a long enough string';
+function getTitleByRawOffset(dump, offset, gotTitle) {
+  let title = new Buffer(256);
 
-        gotTitle(spl[0]);
-      } else {
-        console.error(`failed to read title from offset ${offset}`);
-      }
-    });
-  }
+  // t: titles all.txt
+  fs.read(dump.files.t.fd, title, 0, 256, offset, (err, bytesRead, data) => {
+    if (!err && bytesRead > 0) {
+      title = data.toString('utf-8');
+      var spl = title.split(/\r?\n/);
+      if (spl.length < 2) throw 'didn\'t read a long enough string';
+
+      gotTitle(spl[0]);
+    } else {
+      console.error(`failed to read title from offset ${offset}`);
+    }
+  });
 }
 
 // get the information of the given page other than the latest revision/text
@@ -419,7 +423,6 @@ function getArticle(dump, indexS, gotArticle) {
     }
   } else {
     if (dump.files.sp.eleBitSize) {
-      console.log("** get article packed")
       indexR = readPackedItem(dump.files.sp.fd, dump.files.sp.eleBitSize, indexS);
       getArticleByRawIndex(dump, indexR, gotArticle);
     } else {
