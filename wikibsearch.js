@@ -94,27 +94,33 @@ function processCommandline(thenCallback) {
 }
 
 function getPaths(thenCallback) {
+  const wp = common.getWikipath();
+  if (wp !== "")
+    thenCallback(wp);
+
+//  return "poop!"
+
   // cross-platform for at least Windows and *nix including Mac OS X
   // http://stackoverflow.com/questions/9080085/node-js-find-home-directory-in-platform-agnostic-way
-  const home = process.env[(process.platform == 'win32') ? 'USERPROFILE' : 'HOME'],
-        wikipathpath = home + '/.wikipath';
+//  const home = process.env[(process.platform == 'win32') ? 'USERPROFILE' : 'HOME'],
+//        wikipathpath = home + '/.wikipath';
 
-  fs.exists(wikipathpath, x => {
-    if (x) {
-      let str = fs.createReadStream(wikipathpath, {start: 0, end: 1023});
-      let wikiPath;
-
-      // TODO separate paths for actual dump files and generated index files
-      // TODO support multiple wikiPaths and indexPaths
-      // TODO huge wikipedia dump in a separate place to smaller wiktionary dumps
-
-      str.on('data', data => wikiPath = data.toString('utf-8').replace(/^\s*(.*?)\s*$/, '$1'));
-
-      str.on('end', () => thenCallback(wikiPath));
-    } else {
-      console.error('no ".wikipath" in home');
-    }
-  });
+//  fs.exists(wikipathpath, x => {
+//    if (x) {
+//      let str = fs.createReadStream(wikipathpath, {start: 0, end: 1023});
+//      let wikiPath;
+//
+//      // TODO separate paths for actual dump files and generated index files
+//      // TODO support multiple wikiPaths and indexPaths
+//      // TODO huge wikipedia dump in a separate place to smaller wiktionary dumps
+//
+//      str.on('data', data => wikiPath = data.toString('utf-8').replace(/^\s*(.*?)\s*$/, '$1'));
+//
+//      str.on('end', () => thenCallback(wikiPath));
+//    } else {
+//      console.error('no ".wikipath" in home');
+//    }
+//  });
 }
 
 function isDumpPresent(opts, thenCallback) {
@@ -231,7 +237,7 @@ function getTitleByRawIndex(dump, indexR, gotTitle) {
   fs.read(dump.files.to.fd, offset, 0, dump.sizeof_txt_told, indexR * dump.sizeof_txt_told, (err, bytesRead, data) => {
     if (!err && bytesRead === dump.sizeof_txt_told) {
       const lower = data.readUInt32LE(0);
-      const upper = data.readUInt32LE(4);
+      const upper = dump.sizeof_txt_told === 4 ? 0 : data.readUInt32LE(4);
 
       offset = upper * Math.pow(2, 32) + lower;
 

@@ -1,7 +1,17 @@
 const fs = require('fs')
 
 // greatest common denominator
-const gcd = (a, b) => b === 0 ? a : gcd(b, a % b)
+const gcd = (a, b) =>
+  Number.isNaN(a) || Number.isNaN(b) ? NaN
+  : b === 0 ? a
+  : gcd(b, a % b)
+/*const gcd = (a, b) => {
+  console.log(">>", a,b)
+  if (Number.isNaN(a) || Number.isNaN(b)) { console.log("==",NaN); return NaN; }
+  if (b === 0) { console.log("==", a); return a }
+  
+  return gcd(b, a % b)
+}*/
 
 module.exports = {
   getWikipath: function() {
